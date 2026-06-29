@@ -1,6 +1,6 @@
 Start schedule
 
-if __name__ == "__main__":
+'if __name__ == "__main__"':
 #four spaces after __main__
 
 
@@ -19,7 +19,7 @@ if __name__ == "__main__":
     
 update schedule
 
-if __name__ == "__main__":
+'if __name__ == "__main__"':
 #four spaces after __main__
 
     

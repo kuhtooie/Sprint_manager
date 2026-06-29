@@ -1,0 +1,115 @@
+import tkinter as tk
+from tkinter import messagebox, simpledialog
+import pandas as pd
+
+class DictionaryClassifierGUI:
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Key Classifier")
+        self.root.geometry("350x200")
+
+        self.target_dict = {}
+        self.keys_iterator = None
+        self.current_key = None
+        self.results = {}
+
+    def launch(self):
+        # UI Elements
+        self.label_prompt = tk.Label(self.root, text="Assign a value for:", font=("Arial", 11))
+        self.label_prompt.pack(pady=5)
+
+        self.label_key = tk.Label(self.root, text="", font=("Arial", 14, "bold"), fg='blue')
+        self.label_key.pack(pady=5)
+
+        self.button_frame = tk.Frame(self.root)
+        self.button_frame.pack(pady=20)
+
+        self.btn_yes = tk.Button(self.button_frame, text="Yes", width=10, bg="green", fg="white", command=lambda: self.process_input(1))
+        self.btn_yes.pack(side=tk.LEFT, padx=10)
+        self.btn_no = tk.Button(self.button_frame, text="No", width=10, bg="red", fg="white", command=lambda: self.process_input(0))
+        self.btn_no.pack(side=tk.LEFT, padx=10)
+        self.next_key()
+
+
+    def get_data(self):
+
+        length_input = simpledialog.askinteger(title="Dictionary Size",
+                                               prompt="How many items do you have?",
+                                               minvalue=1, parent=self.root)
+
+        if not length_input:
+            messagebox.showerror(title="Error", message="No items provided. Exiting")
+            self.root.destroy()
+            return
+
+        for i in range(length_input):
+            key = simpledialog.askstring(title="What is the Next Item?",
+                                         prompt=f"Enter a key #{i+1}:",
+                                         parent=self.root)
+            if key is None: break  # user pressed cancel
+            value = simpledialog.askstring(title="Input",
+                                           prompt=f"Enter value for '{key}':",
+                                           parent=self.root)
+
+            if value is None: break
+            self.target_dict[key] = value
+        self.keys_iterator = iter(self.target_dict.keys())
+
+    def save_data(self, file, name):
+
+        self.results = pd.DataFrame(self.results)
+        self.results.to_pickle(file + name + "pickle")
+
+    def load_data(self, file):
+
+        f = pd.read_pickle(file)
+        self.results = {}
+        for i in f.keys():
+            self.results[i] = f[i]
+
+    def next_key(self):
+        self.launch()
+        try:
+            self.current_key = next(self.keys_iterator)
+            self.label_key.config(text=f"'{self.current_key}' (Value: {self.target_dict[self.current_key]})")
+        except StopIteration:
+            self.finish_classification()
+
+    def process_input(self, choice):
+
+        if self.current_key:
+
+            self.results[self.current_key] = choice
+            self.next_key()
+
+    def process_data(self, period):
+        a = 0
+        for i in self.results.keys():
+            a += self.results[i]
+        if a == len(self.results.keys()):
+            print("percent to do today: 0")
+        else:
+            print("percent to do today: " + str(a / len(self.results.keys()) / period * 100))
+
+    def finish_classification(self):
+
+        self.label_prompt.config(text="Final Result")
+        self.label_prompt.config(text="", fg='black')
+        self.btn_no.config(state=tk.DISABLED)
+        self.btn_yes.config(state=tk.DISABLED)
+
+        print("\nFinal Classified Results:")
+        print(self.results)
+
+        messagebox.showinfo(title="Done", message="All keys classified! Results printed to console")
+        self.root.destroy()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = DictionaryClassifierGUI(root)
+    app.get_data()
+    app.launch()
+    root.mainloop()
+
+app.process_data(7)

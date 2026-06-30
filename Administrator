@@ -114,9 +114,11 @@ class Administrator:
 
     def assign_schedule(self):
         sched = DictionaryClassifierGUI(self.root)
+        #get_data currently isn't loading
         sched.get_data()
         names,file = self.get_employee_data()
         for iii in names:
+            sched.next_key()
             sched.save(file,iii)
 
 
@@ -126,7 +128,7 @@ class Administrator:
         for iii in names:
             sched.update(file,iii)
             sched.process_data(7)
-        
+
 
 
     def start(self,root):
@@ -148,3 +150,11 @@ class Administrator:
         btn_c = tk.Button(root, text="Check on employee", command=self.check_on_schedule, padx=15, pady=5)
         # columnspan=2 allows it to center across the entire window width
         btn_c.grid(row=1, column=0, columnspan=2, pady=20)
+
+
+# --- Main Application Window ---
+
+root = tk.Tk()
+a = Administrator(root)
+# Start the main event loop
+root.mainloop()

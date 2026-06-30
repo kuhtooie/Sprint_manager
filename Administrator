@@ -36,7 +36,7 @@ class Administrator:
             for ii in cards:
                 deck[i].append(i+ii)
         players = {}
-        for i in range(4):
+        for i in range(6):
             players[i] = []
             for ii in range(5):
                 deck,s = self.get_card(deck,suit)

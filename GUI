@@ -103,9 +103,12 @@ class DictionaryClassifierGUI:
         for i in self.results.keys():
             a+=self.results[i]
         if a == len(self.results.keys()):
-            print("percent to do today: 0")
+            print("% to do today: 0")
+        elif a == 0:
+            print("% to do today: " + str(1/period))
         else:
-            print("percent to do today: " + str(a/len(self.results.keys())/period*100))
+            print("% to do today: " + str(a/len(self.results.keys())/period*100))
+
 
 
     def finish_classification(self):

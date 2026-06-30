@@ -110,6 +110,3 @@ if __name__ == "__main__":
     a = Administrator(root)
     # Start the main event loop
     root.mainloop()
-a = Administrator(root)
-# Start the main event loop
-root.mainloop()

@@ -1,0 +1,105 @@
+import tkinter as tk
+import pandas as pd
+import random
+
+# --- Functions called by the buttons ---
+class Administrator:
+
+    def __init__(self,root):
+
+        self.start(root)
+
+
+    def get_cards(self):
+        # Create a new top-level window
+        window_a = tk.Toplevel(root)
+        window_a.title("Get Cards")
+        window_a.geometry("300x200")
+        g = self.generate_cards()
+        label = tk.Label(window_a, text="This is the Get Cards window", font=("Arial", 12))
+        label.pack(expand=True)
+
+    def generate_cards(self):
+
+        suit = ('h','d','c','s')
+        cards = ('A','K','Q','J','10','9','8','7','6','5','4','3','2')
+        deck = {}
+        for i in suit:
+            deck[i] = []
+            for ii in cards:
+                deck[i].append(i+ii)
+        players = {}
+        for i in range(4):
+            players[i] = []
+            for ii in range(5):
+                deck,s = self.get_card(deck,suit)
+                players[i].append(s)
+        return self.drop_card(players)
+
+    def drop_card(self,players):
+
+        for i in players:
+            players[i].remove(random.choice(players[i]))
+
+        return players
+
+
+    def get_card(self,deck,suit):
+
+        ss = suit[random.randint(0,random.randint(0,len(suit)-1))]
+        b = random.randint(0,random.randint(0,len(deck[ss])-1))
+
+        c = deck[ss][b]
+
+        deck[ss].remove(deck[ss][b])
+
+        return deck,c
+
+
+    def assign_schedule(self):
+        # Create a new top-level window
+        window_b = tk.Toplevel(root)
+        window_b.title("Assign Schedule")
+        window_b.geometry("300x200")
+        #self.get_data here.. how is the cards loaded along with?
+        label = tk.Label(window_b, text="This is the Assign Schedule window", font=("Arial", 12))
+        label.pack(expand=True)
+
+
+    def check_on_schedule(self):
+        # Create a new top-level window
+        window_c = tk.Toplevel(root)
+        window_c.title("Check On Schedule")
+        window_c.geometry("300x200")
+
+        label = tk.Label(window_c, text="This is the Check On Schedule window", font=("Arial", 12))
+        label.pack(expand=True)
+
+
+    def start(self,root):
+        root.title("Main Window")
+        root.geometry("400x500")  # Tall aspect ratio matching the sketch
+
+        # Using grid weights to configure layout behavior
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_columnconfigure(1, weight=1)
+
+        # Row 0: Button A (Left) and Button B (Right)
+        btn_a = tk.Button(root, text="Populate employee", command=self.get_cards, padx=10, pady=5)
+        btn_a.grid(row=0, column=0, padx=20, pady=(30, 20), sticky="w")
+
+        btn_b = tk.Button(root, text="Make employee schedule", command=self.assign_schedule, padx=10, pady=5)
+        btn_b.grid(row=0, column=1, padx=20, pady=(30, 20), sticky="e")
+
+        # Row 1: Button C (Centered below A and B)
+        btn_c = tk.Button(root, text="Check on employee", command=self.check_on_schedule, padx=15, pady=5)
+        # columnspan=2 allows it to center across the entire window width
+        btn_c.grid(row=1, column=0, columnspan=2, pady=20)
+
+
+# --- Main Application Window ---
+
+root = tk.Tk()
+a = Administrator(root)
+# Start the main event loop
+root.mainloop()

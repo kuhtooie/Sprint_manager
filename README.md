@@ -39,8 +39,8 @@ update schedule
 
 With Administrator
 You need to copy paste all of GUI file "DictionaryClassifierGUI" into the console.
-The button Make employee schedule pulls up a false window, the first is to be entered gibberish and then the second window
-it pulls up; asking for a "key" is to be exited, the third and fourth window are to be used. Working on fixing the bug. The save function is still not working
+The button Make employee pulls up two different windows that asks for a number each time. The first one is to make the schedule and is what will be saved to every
+file. The second asks for the the employees names and will then prompt a window for each name after each has been entered and will ask for the action progress of each name in order provided.
 if __name__ == "__main__":
 
     root = tk.Tk()

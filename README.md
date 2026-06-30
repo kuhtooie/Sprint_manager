@@ -35,3 +35,14 @@ update schedule
     root.mainloop()
 
 ###
+
+
+With Administrator
+You need to copy paste all of GUI file "DictionaryClassifierGUI" into the console.
+The button Make employee schedule sometimes pulls up two windows, the first is to be deleted, the second is to be used.
+if __name__ == "__main__":
+
+    root = tk.Tk()
+    a = Administrator(root)
+    # Start the main event loop
+    root.mainloop()

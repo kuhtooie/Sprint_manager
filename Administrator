@@ -8,6 +8,7 @@ class Administrator:
     def __init__(self,root):
 
         self.start(root)
+        self.root = root
 
 
     def get_cards(self):
@@ -16,8 +17,14 @@ class Administrator:
         window_a.title("Get Cards")
         window_a.geometry("300x200")
         g = self.generate_cards()
-        label = tk.Label(window_a, text="This is the Get Cards window", font=("Arial", 12))
-        label.pack(expand=True)
+        for index, (key, value) in enumerate(g.items()):
+            # key label (Bolded, aligned left)
+            lbl_key = tk.Label(window_a, text=f"{key}:", font=("Arial", 10,'bold'))
+            lbl_key.grid(row=index,column=0,padx=10,pady=5,sticky="w")
+
+            #value label
+            lbl_key = tk.Label(window_a, text=value, font=("Arial", 10))
+            lbl_key.grid(row=index, column=1, padx=10, pady=5, sticky="w")
 
     def generate_cards(self):
 
@@ -98,8 +105,11 @@ class Administrator:
 
 
 # --- Main Application Window ---
-
-root = tk.Tk()
+if __name__ == "__main__":
+    root = tk.Tk()
+    a = Administrator(root)
+    # Start the main event loop
+    root.mainloop()
 a = Administrator(root)
 # Start the main event loop
 root.mainloop()

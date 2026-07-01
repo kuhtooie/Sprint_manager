@@ -2,159 +2,323 @@ import tkinter as tk
 from tkinter import simpledialog, messagebox, filedialog
 import pandas as pd
 import random
+import os
 
-# --- Functions called by the buttons ---
+
 class Administrator:
 
-    def __init__(self,root):
-
+    def __init__(self, root):
         self.root = root
-        self.start(root)
+        self.root.title("Main Window")
+        self.root.geometry("400x500")
 
-    def get_employee_data(self):
-        # Fallback to None if self.root doesn't exist or is destroyed
-        parent_win = self.root if (hasattr(self, 'root') and self.root.winfo_exists()) else None
+        # Core Data Storage
+        self.target_dict = {}
+        self.keys_iterator = None
+        self.current_key = None
+        self.results = {}
 
-        # 1. Ask for the total number of employees
-        num_employees = simpledialog.askinteger(
-            "Employee Count",
-            "How many employees do you have?",
-            minvalue=1,
-            parent=parent_win
-        )
+        # Employee scheduling state variables
+        self.employee_names = []
+        self.current_employee_index = 0
+        self.save_folder = ""
 
-        if not num_employees:
-            messagebox.showinfo("Cancelled", "No employee count provided.")
+        # Toplevel Window reference for classification
+        self.class_win = None
+
+        # Draw main dashboard interface
+        self.start()
+
+    def start(self):
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_columnconfigure(1, weight=1)
+
+        btn_a = tk.Button(self.root, text="Populate employee", command=self.get_cards, padx=10, pady=5)
+        btn_a.grid(row=0, column=0, padx=20, pady=(30, 20), sticky="w")
+
+        btn_b = tk.Button(self.root, text="Make employee schedule", command=self.assign_schedule, padx=10, pady=5)
+        btn_b.grid(row=0, column=1, padx=20, pady=(30, 20), sticky="e")
+
+        btn_c = tk.Button(self.root, text="Check on employee", command=self.check_on_schedule, padx=15, pady=5)
+        btn_c.grid(row=1, column=0, columnspan=2, pady=20)
+
+    def launch(self):
+        """Creates or updates the independent classification window."""
+        if not self.class_win or not self.class_win.winfo_exists():
+            self.class_win = tk.Toplevel(self.root)
+            self.class_win.geometry("350x200")
+
+            self.label_prompt = tk.Label(self.class_win, text="Assign a value for:", font=("Arial", 11))
+            self.label_prompt.pack(pady=5)
+
+            self.label_key = tk.Label(self.class_win, text="", font=("Arial", 14, "bold"), fg='blue')
+            self.label_key.pack(pady=5)
+
+            self.button_frame = tk.Frame(self.class_win)
+            self.button_frame.pack(pady=20)
+
+            self.btn_yes = tk.Button(self.button_frame, text="Yes", width=10, bg="green", fg="white",
+                                     command=lambda: self.process_input(1))
+            self.btn_yes.pack(side=tk.LEFT, padx=10)
+            self.btn_no = tk.Button(self.button_frame, text="No", width=10, bg="red", fg="white",
+                                    command=lambda: self.process_input(0))
+            self.btn_no.pack(side=tk.LEFT, padx=10)
+
+        # Update window title dynamically based on who you are classifying for
+        current_emp = self.employee_names[self.current_employee_index] if self.employee_names else "Default"
+        self.class_win.title(f"Classifying: {current_emp}")
+
+    def get_data(self):
+        length_input = simpledialog.askinteger("Dictionary Size", "How many items do you have?", minvalue=1,
+                                               parent=self.root)
+        if not length_input:
+            messagebox.showerror("Error", "No items provided.")
+            return False
+
+        self.target_dict = {}
+        for i in range(length_input):
+            key = simpledialog.askstring(title="What is the Next Item?", prompt="Enter Next task:", parent=self.root)
+            if key is None: break
+            value = simpledialog.askstring(title="Input", prompt=f"Enter value for '{key}':", parent=self.root)
+            if value is None: break
+            self.target_dict[key] = value
+
+        return True
+
+    def next_key(self):
+        self.launch()
+        try:
+            self.current_key = next(self.keys_iterator)
+            self.label_key.config(text=f"'{self.current_key}'\n(Value: {self.target_dict[self.current_key]})")
+        except StopIteration:
+            self.finish_employee_classification()
+
+    def process_input(self, choice):
+        if self.current_key:
+            self.results[self.current_key] = choice
+            self.next_key()
+
+    def finish_employee_classification(self):
+        """Saves current employee results and evaluates if there are more employees left."""
+        current_emp = self.employee_names[self.current_employee_index]
+        self.save(self.save_folder, current_emp)
+        print(f"Saved schedule for {current_emp}")
+
+        # Move to next employee
+        self.current_employee_index += 1
+        if self.current_employee_index < len(self.employee_names):
+            # Prep fresh dataset iterator for the next employee
+            self.results = {k: 0 for k in self.target_dict.keys()}
+            self.keys_iterator = iter(self.target_dict.keys())
+            self.next_key()
+        else:
+            # All employees complete! Clean up.
+            if self.class_win and self.class_win.winfo_exists():
+                self.class_win.destroy()
+
+            # Save master names list
+            names_df = pd.DataFrame(self.employee_names, columns=['EmployeeName'])
+            names_df.to_pickle(os.path.join(self.save_folder, "names.pickle"))
+
+            messagebox.showinfo("Done!", "All employee schedules generated and saved successfully!")
+
+    def assign_schedule(self):
+        if not self.get_data():
             return
 
+        names, file_path = self.get_employee_data()
+        if not names:
+            return
+        if not file_path:
+            messagebox.showwarning("Warning", "No file name path given. Process aborted.")
+            return
+
+        # Setup tracking state properties
+        self.employee_names = names
+        self.current_employee_index = 0
+        self.save_folder = os.path.dirname(file_path)
+
+        # Setup first loop iteration context manually
+        self.results = {k: 0 for k in self.target_dict.keys()}
+        self.keys_iterator = iter(self.target_dict.keys())
+
+        # Trigger UI chain reaction sequence safely
+        self.next_key()
+
+    def process_data(self, period):
+        a = sum(self.results.values())
+        total_tasks = len(self.results.keys())
+
+        if a == total_tasks:
+            print("% to do today: 0")
+        elif a == 0:
+            print("% to do today: " + str(1 / period * 100))  # Added * 100 to fix percentage consistency here too
+        else:
+            # Calculate remaining tasks instead of completed ones
+            remaining_tasks = total_tasks - a
+            print("% to do today: " + str(remaining_tasks / total_tasks / period * 100))
+            
+            
+    def update(self, folder, name):
+        pickle_file = os.path.join(folder, f"{name}.pickle")
+        if os.path.exists(pickle_file):
+            self.load_data(pickle_file)
+            self.next_key()
+            self.save(folder, name)
+        else:
+            print(f"Schedule file for {name} not found.")
+
+    def load_data(self, file_path):
+        f = pd.read_pickle(file_path)
+        self.results = {}
+        self.target_dict = {}
+        if 'results' in f and 'target_dict' in f:
+            self.results = f['results'].to_dict()
+            self.target_dict = f['target_dict'].to_dict()
+        self.keys_iterator = iter(self.target_dict.keys())
+
+
+    def save(self, folder, name):
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        df = pd.DataFrame({'results': self.results, 'target_dict': self.target_dict})
+        df.to_pickle(os.path.join(folder, f"{name}.pickle"))
+
+
+    def get_employee_data(self):
+        num_employees = simpledialog.askinteger("Employee Count", "How many employees do you have?", minvalue=1,
+                                                parent=self.root)
+        if not num_employees:
+            messagebox.showinfo("Cancelled", "No employee count provided.")
+            return None, None
+
         employee_list = []
-
-        # 2. Loop and prompt for each employee's name
         for i in range(num_employees):
-            name = simpledialog.askstring(
-                "Employee Name",
-                f"Enter the name for employee #{i + 1}:",
-                parent=parent_win
-            )
-
-            if name is None:  # User pressed cancel midway
+            name = simpledialog.askstring("Employee Name", f"Enter the name for employee #{i + 1}:", parent=self.root)
+            if name is None:
                 messagebox.showwarning("Incomplete", "Process interrupted. Keeping partial list.")
                 break
+            employee_list.append(name.strip() if name.strip() else f"Employee_{i + 1}")
 
-            if name.strip():
-                employee_list.append(name.strip())
+        file_path = filedialog.asksaveasfilename(
+            title="Select File Location to Save Employees",
+            parent=self.root,
+            initialfile="employees.txt",
+            defaultextension=".txt",
+            filetypes=[("Text Files", "*.txt"), ("CSV Files", "*.csv"), ("All Files", "*.*")]
+        )
+        return employee_list, file_path
+
+
+    def check_on_schedule(self):
+        file_path = filedialog.askopenfilename(
+            title="Select the 'names.pickle' file to check schedules",
+            parent=self.root,
+            filetypes=[("Pickle Files", "*.pickle"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+
+        # Prompt the user for how many days are left in the schedule
+        period = simpledialog.askinteger(
+            "Schedule Period",
+            "How many days are left in the schedule?",
+            initialvalue=7,
+            minvalue=1,
+            parent=self.root
+        )
+
+        if not period:
+            messagebox.showinfo("Cancelled", "Check on schedule aborted.")
+            return
+
+        folder_dir = os.path.dirname(file_path)
+        try:
+            names_data = pd.read_pickle(file_path)
+
+            # Smart Extraction Fallback Logic
+            if isinstance(names_data, pd.DataFrame):
+                if 'EmployeeName' in names_data.columns:
+                    names = names_data['EmployeeName'].tolist()
+                elif not names_data.empty:
+                    # Fallback 1: If it's a single column DataFrame with a different name
+                    names = names_data.iloc[:, 0].tolist()
+                else:
+                    # Fallback 2: Try checking the index values
+                    names = names_data.index.tolist()
+            elif isinstance(names_data, list):
+                names = names_data
             else:
-                employee_list.append(f"Employee {i + 1}")
+                names = list(names_data)
 
-        # 3. The Last Question: Ask where to save the file
-        file_path = "C:\\Users"
-        if employee_list:
-            file_path = filedialog.asksaveasfilename(
-                title="Select File Location to Save Employees",
-                parent=parent_win,
-                defaultextension=".txt",
-                filetypes=[("Text Files", "*.txt"), ("CSV Files", "*.csv"), ("All Files", "*.*")]
-            )
+            # Sanity check to make sure we found actual names data
+            if not names:
+                raise ValueError("The selected file does not contain any readable employee names.")
 
-        return employee_list,file_path
+            self.employee_names = names
+            self.save_folder = folder_dir
 
+            # Loop through every employee and print their status cleanly
+            for name in self.employee_names:
+                pickle_file = os.path.join(folder_dir, f"{name}.pickle")
 
+                if os.path.exists(pickle_file):
+                    # Use a clean data loading strategy matching your original load_data logic
+                    f = pd.read_pickle(pickle_file)
+
+                    if 'results' in f and 'target_dict' in f:
+                        self.results = f['results'].to_dict()
+                        self.target_dict = f['target_dict'].to_dict()
+
+                        print(f"\n--- Schedule Status For: {name} ---")
+                        self.process_data(period)
+                    else:
+                        print(
+                            f"\n[Warning] File for {name} exists, but lacks 'results' or 'target_dict' data structures.")
+                else:
+                    print(f"\nSchedule file for {name} not found.")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not read schedules: {e}")
+            
+            
+    # --- Card Game Utility Blocks ---
     def get_cards(self):
-        # Create a new top-level window
-        window_a = tk.Toplevel(root)
+        window_a = tk.Toplevel(self.root)
         window_a.title("Get Cards")
         window_a.geometry("300x200")
         g = self.generate_cards()
         for index, (key, value) in enumerate(g.items()):
-            # key label (Bolded, aligned left)
-            lbl_key = tk.Label(window_a, text=f"{key}:", font=("Arial", 10,'bold'))
-            lbl_key.grid(row=index,column=0,padx=10,pady=5,sticky="w")
-
-            #value label
-            lbl_key = tk.Label(window_a, text=value, font=("Arial", 10))
-            lbl_key.grid(row=index, column=1, padx=10, pady=5, sticky="w")
+            lbl_key = tk.Label(window_a, text=f"Player {key}:", font=("Arial", 10, 'bold'))
+            lbl_key.grid(row=index, column=0, padx=10, pady=5, sticky="w")
+            lbl_val = tk.Label(window_a, text=", ".join(value), font=("Arial", 10))
+            lbl_val.grid(row=index, column=1, padx=10, pady=5, sticky="w")
 
     def generate_cards(self):
-
-        suit = ('h','d','c','s')
-        cards = ('A','K','Q','J','10','9','8','7','6','5','4','3','2')
-        deck = {}
-        for i in suit:
-            deck[i] = []
-            for ii in cards:
-                deck[i].append(i+ii)
-        players = {}
+        suit = ('h', 'd', 'c', 's')
+        cards = ('A', 'K', 'Q', 'J', '10', '9', '8', '7', '6', '5', '4', '3', '2')
+        deck = {i: [i + ii for ii in cards] for i in suit}
+        players = {i: [] for i in range(4)}
         for i in range(4):
-            players[i] = []
             for ii in range(5):
-                deck,s = self.get_card(deck,suit)
+                deck, s = self.get_card(deck, suit)
                 players[i].append(s)
         return self.drop_card(players)
 
-
-    def drop_card(self,players):
-
+    def drop_card(self, players):
         for i in players:
             players[i].remove(random.choice(players[i]))
-
         return players
 
-
-    def get_card(self,deck,suit):
-
-        ss = suit[random.randint(0,random.randint(0,len(suit)-1))]
-        b = random.randint(0,random.randint(0,len(deck[ss])-1))
-
-        c = deck[ss][b]
-
-        deck[ss].remove(deck[ss][b])
-
-        return deck,c
+    def get_card(self, deck, suit):
+        ss = random.choice([s for s in suit if deck[s]])
+        c = random.choice(deck[ss])
+        deck[ss].remove(c)
+        return deck, c
 
 
-    def assign_schedule(self):
-        sched = DictionaryClassifierGUI(self.root)
-        #get_data currently isn't loading
-        sched.get_data()
-        names,file = self.get_employee_data()
-        for iii in names:
-            sched.next_key()
-            sched.save(file,iii)
-
-
-    def check_on_schedule(self):
-        sched = DictionaryClassifierGUI(self.root)
-        names,file = self.get_employee_data()
-        for iii in names:
-            sched.update(file,iii)
-            sched.process_data(7)
-
-
-
-    def start(self,root):
-        root.title("Main Window")
-        root.geometry("400x500")  # Tall aspect ratio matching the sketch
-
-        # Using grid weights to configure layout behavior
-        root.grid_columnconfigure(0, weight=1)
-        root.grid_columnconfigure(1, weight=1)
-
-        # Row 0: Button A (Left) and Button B (Right)
-        btn_a = tk.Button(root, text="Populate employee", command=self.get_cards, padx=10, pady=5)
-        btn_a.grid(row=0, column=0, padx=20, pady=(30, 20), sticky="w")
-
-        btn_b = tk.Button(root, text="Make employee schedule", command=self.assign_schedule, padx=10, pady=5)
-        btn_b.grid(row=0, column=1, padx=20, pady=(30, 20), sticky="e")
-
-        # Row 1: Button C (Centered below A and B)
-        btn_c = tk.Button(root, text="Check on employee", command=self.check_on_schedule, padx=15, pady=5)
-        # columnspan=2 allows it to center across the entire window width
-        btn_c.grid(row=1, column=0, columnspan=2, pady=20)
-
-
-# --- Main Application Window ---
-
-root = tk.Tk()
-a = Administrator(root)
-# Start the main event loop
-root.mainloop()
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = Administrator(root)
+    root.mainloop()
+    

@@ -3,6 +3,11 @@ from tkinter import simpledialog, messagebox, filedialog
 import pandas as pd
 import random
 import os
+import uuid
+import threading
+import time
+import webbrowser
+import requests
 
 
 class Administrator:
@@ -10,7 +15,7 @@ class Administrator:
     def __init__(self, root):
         self.root = root
         self.root.title("Main Window")
-        self.root.geometry("400x500")
+        self.root.geometry("450x500")  # Slightly wider to accommodate labels
 
         # Core Data Storage
         self.target_dict = {}
@@ -23,6 +28,10 @@ class Administrator:
         self.current_employee_index = 0
         self.save_folder = ""
 
+        # OAuth / Stripe configuration & user state
+        self.user_id = str(uuid.uuid4())
+        self.backend_url = "http://127.0.0.1:8000"
+
         # Toplevel Window reference for classification
         self.class_win = None
 
@@ -30,17 +39,71 @@ class Administrator:
         self.start()
 
     def start(self):
+        # Configure uniform weight for columns and rows to distribute space evenly
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=1)
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_rowconfigure(1, weight=1)
 
+        # Row 0, Column 0: Populate Employee
         btn_a = tk.Button(self.root, text="Populate employee", command=self.get_cards, padx=10, pady=5)
-        btn_a.grid(row=0, column=0, padx=20, pady=(30, 20), sticky="w")
+        btn_a.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
 
+        # Row 0, Column 1: Make Schedule
         btn_b = tk.Button(self.root, text="Make employee schedule", command=self.assign_schedule, padx=10, pady=5)
-        btn_b.grid(row=0, column=1, padx=20, pady=(30, 20), sticky="e")
+        btn_b.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
 
+        # Row 1, Column 0: Check Schedule
         btn_c = tk.Button(self.root, text="Check on employee", command=self.check_on_schedule, padx=15, pady=5)
-        btn_c.grid(row=1, column=0, columnspan=2, pady=20)
+        btn_c.grid(row=1, column=0, padx=20, pady=20, sticky="nsew")
+
+        # Row 1, Column 1: Purchase & Open Cloud Dictionary (Integrated Client)
+        self.btn_d = tk.Button(self.root, text="Purchase & Open Dictionary", command=self.start_purchase_flow, padx=15,
+                               pady=5, bg="green", fg="white")
+        self.btn_d.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
+
+    def start_purchase_flow(self):
+        """Disables the button and opens the Stripe gateway url on your local/cloud backend"""
+        self.btn_d.config(state="disabled", text="Waiting for payment...", bg="orange")
+
+        # Open default web browser to the server checkout redirection endpoint
+        webbrowser.open(f"{self.backend_url}/buy/{self.user_id}")
+
+        # Spin up background verification loop so the Tkinter UI doesn't freeze up
+        threading.Thread(target=self.poll_for_auth, daemon=True).start()
+
+    def poll_for_auth(self):
+        """Asynchronously monitors the secure backend until a Stripe webhook validates the asset release"""
+        while True:
+            try:
+                response = requests.get(f"{self.backend_url}/get-dictionary/{self.user_id}")
+                if response.status_code == 200:
+                    dictionary_payload = response.json()
+                    # Hand data payload execution back to main loop to handle safe window updates
+                    self.root.after(0, self.open_dictionary_window, dictionary_payload)
+                    break
+            except requests.exceptions.ConnectionError:
+                # Backend server isn't running yet, or network dropped briefly. Rest and retry.
+                pass
+
+            time.sleep(2)
+
+    def open_dictionary_window(self, data):
+        """Re-enables dashboard controls and renders the retrieved data to an explicit UI view window"""
+        self.btn_d.config(state="normal", text="Purchase & Open Dictionary", bg="green")
+
+        new_window = tk.Toplevel(self.root)
+        new_window.title("Purchased Cloud Dictionary Data")
+        new_window.geometry("400x300")
+
+        text_widget = tk.Text(new_window, wrap="word")
+        text_widget.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Display the custom payload dictionary cleanly
+        for key, val in data.items():
+            text_widget.insert(tk.END, f"【{key}】: {val}\n\n")
+
+        text_widget.config(state="disabled")  # Set content frame to read-only
 
     def launch(self):
         """Creates or updates the independent classification window."""
@@ -64,7 +127,6 @@ class Administrator:
                                     command=lambda: self.process_input(0))
             self.btn_no.pack(side=tk.LEFT, padx=10)
 
-        # Update window title dynamically based on who you are classifying for
         current_emp = self.employee_names[self.current_employee_index] if self.employee_names else "Default"
         self.class_win.title(f"Classifying: {current_emp}")
 
@@ -104,19 +166,15 @@ class Administrator:
         self.save(self.save_folder, current_emp)
         print(f"Saved schedule for {current_emp}")
 
-        # Move to next employee
         self.current_employee_index += 1
         if self.current_employee_index < len(self.employee_names):
-            # Prep fresh dataset iterator for the next employee
             self.results = {k: 0 for k in self.target_dict.keys()}
             self.keys_iterator = iter(self.target_dict.keys())
             self.next_key()
         else:
-            # All employees complete! Clean up.
             if self.class_win and self.class_win.winfo_exists():
                 self.class_win.destroy()
 
-            # Save master names list
             names_df = pd.DataFrame(self.employee_names, columns=['EmployeeName'])
             names_df.to_pickle(os.path.join(self.save_folder, "names.pickle"))
 
@@ -133,16 +191,13 @@ class Administrator:
             messagebox.showwarning("Warning", "No file name path given. Process aborted.")
             return
 
-        # Setup tracking state properties
         self.employee_names = names
         self.current_employee_index = 0
         self.save_folder = os.path.dirname(file_path)
 
-        # Setup first loop iteration context manually
         self.results = {k: 0 for k in self.target_dict.keys()}
         self.keys_iterator = iter(self.target_dict.keys())
 
-        # Trigger UI chain reaction sequence safely
         self.next_key()
 
     def process_data(self, period):
@@ -152,13 +207,11 @@ class Administrator:
         if a == total_tasks:
             print("% to do today: 0")
         elif a == 0:
-            print("% to do today: " + str(1 / period * 100))  # Added * 100 to fix percentage consistency here too
+            print("% to do today: " + str(1 / period * 100))
         else:
-            # Calculate remaining tasks instead of completed ones
             remaining_tasks = total_tasks - a
             print("% to do today: " + str(remaining_tasks / total_tasks / period * 100))
-            
-            
+
     def update(self, folder, name):
         pickle_file = os.path.join(folder, f"{name}.pickle")
         if os.path.exists(pickle_file):
@@ -177,13 +230,11 @@ class Administrator:
             self.target_dict = f['target_dict'].to_dict()
         self.keys_iterator = iter(self.target_dict.keys())
 
-
     def save(self, folder, name):
         if not os.path.exists(folder):
             os.makedirs(folder)
         df = pd.DataFrame({'results': self.results, 'target_dict': self.target_dict})
         df.to_pickle(os.path.join(folder, f"{name}.pickle"))
-
 
     def get_employee_data(self):
         num_employees = simpledialog.askinteger("Employee Count", "How many employees do you have?", minvalue=1,
@@ -209,7 +260,6 @@ class Administrator:
         )
         return employee_list, file_path
 
-
     def check_on_schedule(self):
         file_path = filedialog.askopenfilename(
             title="Select the 'names.pickle' file to check schedules",
@@ -219,7 +269,6 @@ class Administrator:
         if not file_path:
             return
 
-        # Prompt the user for how many days are left in the schedule
         period = simpledialog.askinteger(
             "Schedule Period",
             "How many days are left in the schedule?",
@@ -236,34 +285,28 @@ class Administrator:
         try:
             names_data = pd.read_pickle(file_path)
 
-            # Smart Extraction Fallback Logic
             if isinstance(names_data, pd.DataFrame):
                 if 'EmployeeName' in names_data.columns:
                     names = names_data['EmployeeName'].tolist()
                 elif not names_data.empty:
-                    # Fallback 1: If it's a single column DataFrame with a different name
                     names = names_data.iloc[:, 0].tolist()
                 else:
-                    # Fallback 2: Try checking the index values
                     names = names_data.index.tolist()
             elif isinstance(names_data, list):
                 names = names_data
             else:
                 names = list(names_data)
 
-            # Sanity check to make sure we found actual names data
             if not names:
                 raise ValueError("The selected file does not contain any readable employee names.")
 
             self.employee_names = names
             self.save_folder = folder_dir
 
-            # Loop through every employee and print their status cleanly
             for name in self.employee_names:
                 pickle_file = os.path.join(folder_dir, f"{name}.pickle")
 
                 if os.path.exists(pickle_file):
-                    # Use a clean data loading strategy matching your original load_data logic
                     f = pd.read_pickle(pickle_file)
 
                     if 'results' in f and 'target_dict' in f:
@@ -280,8 +323,7 @@ class Administrator:
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not read schedules: {e}")
-            
-            
+
     # --- Card Game Utility Blocks ---
     def get_cards(self):
         window_a = tk.Toplevel(self.root)

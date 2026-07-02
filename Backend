@@ -1,0 +1,137 @@
+import time
+import jwt
+import stripe
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import RedirectResponse, HTMLResponse
+
+class Backend:
+    def __init__(self):
+        # 1. Initialize Security & Crypto Variables
+        self.JWT_SECRET = "super_secret_system_signing_key_12345"
+        self.JWT_ALGORITHM = "HS256"
+
+        # 2. Initialize Stripe Configurations
+        stripe.api_key = "sk_test_..."
+        self.ENDPOINT_SECRET = "whsec_..."
+
+        # 3. Initialize FastAPI App instance
+        self.app = FastAPI(title="Secure Dictionary Auth API")
+
+        # 4. Initialize In-Memory Data Storage
+        self.PENDING_TOKENS = {} 
+        self.DICTIONARY_DATA = {
+            "apple": "A round red fruit", 
+            "btc": "Digital gold"
+        }
+
+        # 5. Bind class methods to the FastAPI router
+        self._setup_routes()
+
+    def _setup_routes(self):
+        """Maps endpoints to the methods belonging to this class instance"""
+        self.app.add_api_route("/buy/{user_id}", self.create_checkout, methods=["GET"])
+        self.app.add_api_route("/stripe-webhook", self.stripe_webhook, methods=["POST"])
+        self.app.add_api_route("/payment-success", self.payment_success, methods=["GET"], response_class=HTMLResponse)
+        self.app.add_api_route("/claim-token/{user_id}", self.claim_token, methods=["GET"])
+        self.app.add_api_route("/get-dictionary", self.get_dictionary, methods=["GET"])
+
+    def generate_access_token(self, user_id: str) -> str:
+        """Generates a cryptographically signed JWT that expires in 15 minutes"""
+        payload = {
+            "sub": user_id,
+            "exp": time.time() + 900,
+            "iss": "your-auth-server"
+        }
+        return jwt.encode(payload, self.JWT_SECRET, algorithm=self.JWT_ALGORITHM)
+
+    def create_checkout(self, user_id: str):
+        """Generates a Stripe Checkout page link and redirects the user"""
+        try:
+            session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{'price_data': {'currency': 'usd', 'product_data': {'name': 'Premium Dictionary'}, 'unit_amount': 999}, 'quantity': 1}],
+                mode='payment',
+                success_url=f"http://127.0.0.1:8000/payment-success?user_id={user_id}",
+                cancel_url="http://127.0.0.1:8000/cancel",
+                client_reference_id=user_id
+            )
+            return RedirectResponse(url=session.url)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    async def stripe_webhook(self, request: Request):
+        """Listens for Stripe's automated server notification that the user paid"""
+        payload = await request.body()
+        sig_header = request.headers.get("stripe-signature")
+        
+        try:
+            event = stripe.Webhook.construct_event(payload, sig_header, self.ENDPOINT_SECRET)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid signature")
+
+        if event['type'] == 'checkout.session.completed':
+            session = event['data']['object']
+            user_id = session['client_reference_id']
+            
+            # Cryptographically generate a token using instance variables
+            secure_jwt = self.generate_access_token(user_id)
+            self.PENDING_TOKENS[user_id] = secure_jwt 
+            
+        return {"status": "success"}
+
+    def payment_success(self, user_id: str):
+        """Graceful landing tab displayed to the customer once Stripe transaction finishes"""
+        return """
+        <html>
+            <head><style>body{font-family:sans-serif; text-align:center; margin-top:50px;}</style></head>
+            <body>
+                <h2 style="color: green;">✓ Payment Successful!</h2>
+                <p>You can safely close this web browser window and return directly to your Desktop Application.</p>
+            </body>
+        </html>
+        """
+
+    def claim_token(self, user_id: str):
+        """Desktop app calls this to safely pull down their new signed JWT"""
+        token = self.PENDING_TOKENS.pop(user_id, None)
+        if not token:
+            raise HTTPException(status_code=400, detail="No token available or already claimed.")
+        return {"access_token": token}
+
+    def get_dictionary(self, request: Request):
+        """
+        Secure endpoint: Manually verifies the JWT signature passed in the Authorization header.
+        """
+        auth_header = request.headers.get("Authorization")
+        
+        if not auth_header or not auth_header.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Unauthorized: Missing or invalid token.")
+        
+        token = auth_header.split(" ")[1]
+        
+        try:
+            jwt.decode(token, self.JWT_SECRET, algorithms=[self.JWT_ALGORITHM])
+            return self.DICTIONARY_DATA
+            
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token has expired.")
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=401, detail="Invalid token signature.")
+
+    def run_server(self):
+        """Explicitly handles booting up the web server process by feeding it the internal app instance"""
+        print("Starting Secure OOP Cloud Backend on http://127.0.0.1:8000")
+        # Passing self.app object instance directly removes the need for global variables
+        uvicorn.run(self.app, host="127.0.0.1", port=8000)
+
+
+# ==========================================
+# Server Runtime Execution Entry Point
+# ==========================================
+if __name__ == "__main__":
+    # 1. Initialize the class variables, memory arrays, and route maps
+    backend_service = Backend()
+    
+    # 2. Visibly call the execution wrapper to mount port 8000 and process incoming requests
+    backend_service.run_server()

@@ -27,6 +27,7 @@ class Administrator:
         self.employee_names = []
         self.current_employee_index = 0
         self.save_folder = ""
+        self.is_updating_single = False  # Track if we are modifying only one employee
 
         # OAuth / Stripe configuration & user state
         self.user_id = str(uuid.uuid4())
@@ -175,10 +176,14 @@ class Administrator:
             if self.class_win and self.class_win.winfo_exists():
                 self.class_win.destroy()
 
-            names_df = pd.DataFrame(self.employee_names, columns=['EmployeeName'])
-            names_df.to_pickle(os.path.join(self.save_folder, "names.pickle"))
-
-            messagebox.showinfo("Done!", "All employee schedules generated and saved successfully!")
+            # Prevent overwriting standard master name files if we were only targeting one update loop
+            if not self.is_updating_single:
+                names_df = pd.DataFrame(self.employee_names, columns=['EmployeeName'])
+                names_df.to_pickle(os.path.join(self.save_folder, "names.pickle"))
+                messagebox.showinfo("Done!", "All employee schedules generated and saved successfully!")
+            else:
+                self.is_updating_single = False
+                messagebox.showinfo("Done!", f"Schedule status for {current_emp} updated successfully!")
 
     def assign_schedule(self):
         if not self.get_data():
@@ -191,6 +196,7 @@ class Administrator:
             messagebox.showwarning("Warning", "No file name path given. Process aborted.")
             return
 
+        self.is_updating_single = False
         self.employee_names = names
         self.current_employee_index = 0
         self.save_folder = os.path.dirname(file_path)
@@ -261,10 +267,10 @@ class Administrator:
         return employee_list, file_path
 
     def check_on_schedule(self):
-        """Pulls up an intermediate window offering Analysis or To-Do list views."""
+        """Pulls up an intermediate window offering Analysis, To-Do list views, or status updates."""
         choice_win = tk.Toplevel(self.root)
         choice_win.title("Employee Options")
-        choice_win.geometry("320x140")
+        choice_win.geometry("480x140")  # Widened layout setup to naturally adapt 3 items
 
         lbl = tk.Label(choice_win, text="Choose an option for the employee:", font=("Arial", 11))
         lbl.pack(pady=15)
@@ -281,6 +287,11 @@ class Administrator:
         btn_todo = tk.Button(btn_frame, text="Check to do list", width=14,
                              command=lambda: [choice_win.destroy(), self.check_todo_list()])
         btn_todo.pack(side=tk.LEFT, padx=10)
+
+        # Update Status Button (NEW)
+        btn_update = tk.Button(btn_frame, text="Update status", width=14,
+                               command=lambda: [choice_win.destroy(), self.prompt_update_status()])
+        btn_update.pack(side=tk.LEFT, padx=10)
 
     def run_analysis(self):
         """Original checking routine that prompts for schedules and outputs metric performance."""
@@ -415,6 +426,74 @@ class Administrator:
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not read schedules: {e}")
+
+    def prompt_update_status(self):
+        """Loads names.pickle, lets user select exactly ONE employee, and executes their status updates."""
+        file_path = filedialog.askopenfilename(
+            title="Select 'names.pickle' to fetch current employee roster",
+            parent=self.root,
+            filetypes=[("Pickle Files", "*.pickle"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+
+        folder_dir = os.path.dirname(file_path)
+        try:
+            names_data = pd.read_pickle(file_path)
+            if isinstance(names_data, pd.DataFrame):
+                if 'EmployeeName' in names_data.columns:
+                    names = names_data['EmployeeName'].tolist()
+                elif not names_data.empty:
+                    names = names_data.iloc[:, 0].tolist()
+                else:
+                    names = names_data.index.tolist()
+            elif isinstance(names_data, list):
+                names = names_data
+            else:
+                names = list(names_data)
+
+            if not names:
+                raise ValueError("No active names found in file.")
+
+            # Create selector interface window frame
+            select_win = tk.Toplevel(self.root)
+            select_win.title("Select Employee to Update")
+            select_win.geometry("320x280")
+
+            lbl = tk.Label(select_win, text="Select single employee profile:", font=("Arial", 11))
+            lbl.pack(pady=10)
+
+            listbox = tk.Listbox(select_win, selectmode=tk.SINGLE)
+            listbox.pack(fill="both", expand=True, padx=20, pady=5)
+            for name in names:
+                listbox.insert(tk.END, name)
+
+            def on_confirm():
+                selection = listbox.curselection()
+                if not selection:
+                    messagebox.showwarning("Warning", "Please select an employee profile.")
+                    return
+
+                selected_name = listbox.get(selection[0])
+                select_win.destroy()
+
+                pickle_file = os.path.join(folder_dir, f"{selected_name}.pickle")
+                if os.path.exists(pickle_file):
+                    self.is_updating_single = True
+                    self.employee_names = [selected_name]
+                    self.current_employee_index = 0
+                    self.save_folder = folder_dir
+
+                    self.load_data(pickle_file)
+                    self.next_key()
+                else:
+                    messagebox.showerror("Error", f"Pickle file record not found for: {selected_name}")
+
+            btn_confirm = tk.Button(select_win, text="Select Profile", command=on_confirm)
+            btn_confirm.pack(pady=10)
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed parsing tracking list: {e}")
 
     # --- Card Game Utility Blocks ---
     def get_cards(self):

@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import simpledialog, messagebox, filedialog
+from tkinter import simpledialog, messagebox, filedialog, scrolledtext
 import pandas as pd
 import random
 import os
@@ -53,7 +53,7 @@ class Administrator:
         btn_b = tk.Button(self.root, text="Make employee schedule", command=self.assign_schedule, padx=10, pady=5)
         btn_b.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
 
-        # Row 1, Column 0: Check Schedule
+        # Row 1, Column 0: Check Schedule (Opens the new choice window)
         btn_c = tk.Button(self.root, text="Check on employee", command=self.check_on_schedule, padx=15, pady=5)
         btn_c.grid(row=1, column=0, padx=20, pady=20, sticky="nsew")
 
@@ -261,6 +261,29 @@ class Administrator:
         return employee_list, file_path
 
     def check_on_schedule(self):
+        """Pulls up an intermediate window offering Analysis or To-Do list views."""
+        choice_win = tk.Toplevel(self.root)
+        choice_win.title("Employee Options")
+        choice_win.geometry("320x140")
+
+        lbl = tk.Label(choice_win, text="Choose an option for the employee:", font=("Arial", 11))
+        lbl.pack(pady=15)
+
+        btn_frame = tk.Frame(choice_win)
+        btn_frame.pack(pady=5)
+
+        # Run Analysis Button
+        btn_analysis = tk.Button(btn_frame, text="Run analysis", width=14,
+                                 command=lambda: [choice_win.destroy(), self.run_analysis()])
+        btn_analysis.pack(side=tk.LEFT, padx=10)
+
+        # Check To Do List Button
+        btn_todo = tk.Button(btn_frame, text="Check to do list", width=14,
+                             command=lambda: [choice_win.destroy(), self.check_todo_list()])
+        btn_todo.pack(side=tk.LEFT, padx=10)
+
+    def run_analysis(self):
+        """Original checking routine that prompts for schedules and outputs metric performance."""
         file_path = filedialog.askopenfilename(
             title="Select the 'names.pickle' file to check schedules",
             parent=self.root,
@@ -320,6 +343,75 @@ class Administrator:
                             f"\n[Warning] File for {name} exists, but lacks 'results' or 'target_dict' data structures.")
                 else:
                     print(f"\nSchedule file for {name} not found.")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not read schedules: {e}")
+
+    def check_todo_list(self):
+        """Loads names.pickle, opens individual employee files, and displays their details in a UI window."""
+        file_path = filedialog.askopenfilename(
+            title="Select the 'names.pickle' file to view lists",
+            parent=self.root,
+            filetypes=[("Pickle Files", "*.pickle"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+
+        folder_dir = os.path.dirname(file_path)
+        try:
+            names_data = pd.read_pickle(file_path)
+
+            if isinstance(names_data, pd.DataFrame):
+                if 'EmployeeName' in names_data.columns:
+                    names = names_data['EmployeeName'].tolist()
+                elif not names_data.empty:
+                    names = names_data.iloc[:, 0].tolist()
+                else:
+                    names = names_data.index.tolist()
+            elif isinstance(names_data, list):
+                names = names_data
+            else:
+                names = list(names_data)
+
+            if not names:
+                raise ValueError("The selected file does not contain any readable employee names.")
+
+            # Set up the Display Window for the Schedules
+            todo_win = tk.Toplevel(self.root)
+            todo_win.title("Employee Tasks and Schedules")
+            todo_win.geometry("450x400")
+
+            txt_display = scrolledtext.ScrolledText(todo_win, wrap="word", font=("Courier New", 10))
+            txt_display.pack(fill="both", expand=True, padx=10, pady=10)
+
+            for name in names:
+                pickle_file = os.path.join(folder_dir, f"{name}.pickle")
+                txt_display.insert(tk.END, f"=========================================\n")
+                txt_display.insert(tk.END, f" EMPLOYEE: {name}\n")
+                txt_display.insert(tk.END, f"=========================================\n")
+
+                if os.path.exists(pickle_file):
+                    f = pd.read_pickle(pickle_file)
+
+                    if 'results' in f and 'target_dict' in f:
+                        emp_results = f['results'].to_dict()
+                        emp_targets = f['target_dict'].to_dict()
+
+                        txt_display.insert(tk.END, f"{'Task Name':<25} | {'Value':<10} | {'Status':<10}\n")
+                        txt_display.insert(tk.END, f"{'-' * 25}-|-{'-' * 10}-|-{'-' * 10}\n")
+
+                        for task, value in emp_targets.items():
+                            choice = emp_results.get(task, 0)
+                            status_str = "Completed" if choice == 1 else "To-Do"
+                            txt_display.insert(tk.END, f"{task:<25} | {str(value):<10} | {status_str:<10}\n")
+                    else:
+                        txt_display.insert(tk.END, "[Warning] Missing 'results' or 'target_dict' arrays.\n")
+                else:
+                    txt_display.insert(tk.END, "[File Not Found] No saved schedule pickle exists.\n")
+
+                txt_display.insert(tk.END, "\n\n")
+
+            txt_display.config(state="disabled")  # Set read-only
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not read schedules: {e}")

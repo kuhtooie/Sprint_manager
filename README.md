@@ -1,6 +1,10 @@
 Setting up a python enviorment:
+    
+    
     downloading pycharm
         https://www.youtube.com/watch?v=bfl9QkRBxec
+
+        
     downloading python
         https://www.youtube.com/watch?v=e70ykVBazAg
 

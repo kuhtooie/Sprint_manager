@@ -1,3 +1,6 @@
+All class files are copy paste into the console and runs with pandas, tkinter and requests downloaded.
+Backend takes setting up
+
 Setting up a python enviorment:
     
     

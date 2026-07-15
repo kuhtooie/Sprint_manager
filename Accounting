@@ -6,10 +6,8 @@ class BudgetApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Daily Budget Checklist")
-        
-        # INCREASED BY AN ADDITIONAL 4 SQUARE INCHES (Total +6 sq in from original)
-        # Previous: "565x666" (approx. 40.8 sq inches)
-        # New: "591x699" (approx. 44.8 sq inches)
+
+        # Geometry set to easily fit all 10 items
         self.root.geometry("591x699")
         self.root.config(bg="#fbf6eb")  # Yellowish notebook paper background color
 
@@ -30,12 +28,36 @@ class BudgetApp:
         # List to keep track of the dynamic row widgets
         self.expense_rows = []
 
-        # Populate initial items based on your sketch
-        self.add_car_row()
-        self.add_standard_row("Cellphone", "Monthly Cost ($)")
-        self.add_standard_row("Rent", "Monthly Cost ($)")
-        self.add_standard_row("Utilities", "Monthly Cost ($)")  # <-- Added permanently here
-        self.add_standard_row("Food", "Daily Food ($) / 3")
+        # --- Populate initial items and values from screenshot ---
+        # 1. Car (Checked, MPD: 100, MPG: 37, Price: 4.00, Insurance: 452)
+        self.add_car_row(mpd="100", mpg="37", price="4", insurance="452", checked=True)
+
+        # 2. Cellphone (Checked, $100)
+        self.add_standard_row("Cellphone", "Monthly Cost ($)", default_val="100", checked=True)
+
+        # 3. Rent (Checked, $1200)
+        self.add_standard_row("Rent", "Monthly Cost ($)", default_val="1200", checked=True)
+
+        # 4. Utilities (Checked, $150)
+        self.add_standard_row("Utilities", "Monthly Cost ($)", default_val="150", checked=True)
+
+        # 5. Food (Checked, $450)
+        self.add_standard_row("Food", "Monthly Cost ($)", default_val="450", checked=True)
+
+        # 6. loan (Checked, $144)
+        self.add_standard_row("loan", "Monthly Cost ($)", default_val="144", checked=True)
+
+        # 7. storage (Checked, $145)
+        self.add_standard_row("storage", "Monthly Cost ($)", default_val="145", checked=True)
+
+        # 8. gym (Checked, $89)
+        self.add_standard_row("gym", "Monthly Cost ($)", default_val="89", checked=True)
+
+        # 9. school loan (Checked, $100)
+        self.add_standard_row("school loan", "Monthly Cost ($)", default_val="100", checked=True)
+
+        # 10. MBA (Unchecked, $990)
+        self.add_standard_row("MBA", "Monthly Cost ($)", default_val="990", checked=False)
 
         # --- Bottom Control Section ---
         bottom_frame = tk.Frame(root, bg="#fbf6eb")
@@ -77,12 +99,12 @@ class BudgetApp:
         )
         self.total_label.pack(side="bottom", pady=5)
 
-    def add_car_row(self):
-        """Creates the custom Car row requiring Gas (mpd/mpg * price) and Insurance inputs"""
+    def add_car_row(self, mpd="30", mpg="25", price="3.50", insurance="120", checked=True):
+        """Creates the custom Car row requiring Gas and Insurance inputs"""
         frame = tk.Frame(self.main_frame, bg="#fbf6eb", pady=8)
         frame.pack(fill="x")
 
-        var = tk.BooleanVar(value=True)
+        var = tk.BooleanVar(value=checked)
         chk = tk.Checkbutton(frame, text="Car", variable=var, font=("Arial", 11, "bold"), bg="#fbf6eb")
         chk.pack(side="left", anchor="w")
 
@@ -90,19 +112,19 @@ class BudgetApp:
         lbl_gas = tk.Label(frame, text="Gas (Miles/day:", font=("Arial", 9), bg="#fbf6eb")
         lbl_gas.pack(side="left", padx=(10, 2))
         entry_mpd = tk.Entry(frame, width=5)
-        entry_mpd.insert(0, "30")  # Default template value
+        entry_mpd.insert(0, mpd)
         entry_mpd.pack(side="left")
 
         lbl_mpg = tk.Label(frame, text=" MPG:", font=("Arial", 9), bg="#fbf6eb")
         lbl_mpg.pack(side="left", padx=2)
         entry_mpg = tk.Entry(frame, width=5)
-        entry_mpg.insert(0, "25")
+        entry_mpg.insert(0, mpg)
         entry_mpg.pack(side="left")
 
         lbl_price = tk.Label(frame, text=" Gas Price: $", font=("Arial", 9), bg="#fbf6eb")
         lbl_price.pack(side="left", padx=2)
         entry_price = tk.Entry(frame, width=5)
-        entry_price.insert(0, "3.50")
+        entry_price.insert(0, price)
         entry_price.pack(side="left")
         lbl_gas_close = tk.Label(frame, text=")", font=("Arial", 9), bg="#fbf6eb")
         lbl_gas_close.pack(side="left")
@@ -111,7 +133,7 @@ class BudgetApp:
         lbl_ins = tk.Label(frame, text=" Insurance. Monthly: $", font=("Arial", 9), bg="#fbf6eb")
         lbl_ins.pack(side="left", padx=(10, 2))
         entry_ins = tk.Entry(frame, width=6)
-        entry_ins.insert(0, "120")
+        entry_ins.insert(0, insurance)
         entry_ins.pack(side="left")
 
         # Track this special calculation row
@@ -124,12 +146,12 @@ class BudgetApp:
             "insurance": entry_ins
         })
 
-    def add_standard_row(self, label_text, placeholder_text):
+    def add_standard_row(self, label_text, placeholder_text, default_val="", checked=True):
         """Creates a generic row divided by 30 (monthly -> daily) or food daily/3"""
-        frame = tk.Frame(self.main_frame, bg="#fbf6eb", pady=8)
+        frame = tk.Frame(self.main_frame, bg="#fbf6eb", pady=4)  # Padding slightly reduced to fit more rows
         frame.pack(fill="x")
 
-        var = tk.BooleanVar(value=True)
+        var = tk.BooleanVar(value=checked)
         chk = tk.Checkbutton(frame, text=label_text, variable=var, font=("Arial", 11, "bold"), bg="#fbf6eb")
         chk.pack(side="left", anchor="w")
 
@@ -137,24 +159,15 @@ class BudgetApp:
         lbl_input.pack(side="left", padx=(10, 5))
 
         entry = tk.Entry(frame, width=10)
+        entry.insert(0, default_val)
         entry.pack(side="left")
-
-        # Prepopulate clean default examples
-        if label_text.lower() == "cellphone":
-            entry.insert(0, "60")
-        elif label_text.lower() == "rent":
-            entry.insert(0, "1200")
-        elif label_text.lower() == "utilities":
-            entry.insert(0, "150")  # Default template value for utilities
-        elif label_text.lower() == "food":
-            entry.insert(0, "30")
 
         self.expense_rows.append({
             "type": "standard",
             "name": label_text,
             "checked_var": var,
             "entry": entry,
-            "divisor": 3 if "food" in label_text.lower() else 30
+            "divisor": 30  # Unified to divide by 30 (monthly -> daily)
         })
 
     def prompt_add_expense(self):
@@ -184,7 +197,7 @@ class BudgetApp:
             if name:
                 divisor = 30 if calc_type.get() == "monthly" else 1
                 placeholder = "Monthly Cost ($)" if divisor == 30 else "Daily Cost ($)"
-                self.add_standard_row(name, placeholder)
+                self.add_standard_row(name, placeholder, default_val="0", checked=True)
                 # update divisor in our tracker
                 self.expense_rows[-1]["divisor"] = divisor
                 prompt_win.destroy()
@@ -215,17 +228,15 @@ class BudgetApp:
                     ins_monthly = float(row["insurance"].get() or 0)
                     daily_ins = ins_monthly / 30
 
-                    # Fixed indent check here
                     total_daily += (daily_gas + daily_ins)
 
                 elif row["type"] == "standard":
-                    # Standard Formula: Raw value / Divisor (30 for monthly, 3 for food, etc.)
+                    # Standard Formula: Raw value / Divisor
                     raw_val = float(row["entry"].get() or 0)
                     daily_val = raw_val / row["divisor"]
                     total_daily += daily_val
 
             except ValueError:
-                # Silently skip errors or handle non-numeric inputs
                 messagebox.showerror("Input Error", "Please ensure all entered values are valid numbers.")
                 return
 
@@ -237,3 +248,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = BudgetApp(root)
     root.mainloop()
+    

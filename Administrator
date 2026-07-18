@@ -294,7 +294,7 @@ class Administrator:
         btn_update.pack(side=tk.LEFT, padx=10)
 
     def run_analysis(self):
-        """Original checking routine that prompts for schedules and outputs metric performance."""
+        """Displays metric performance in a pop-up window instead of the console."""
         file_path = filedialog.askopenfilename(
             title="Select the 'names.pickle' file to check schedules",
             parent=self.root,
@@ -318,46 +318,53 @@ class Administrator:
         folder_dir = os.path.dirname(file_path)
         try:
             names_data = pd.read_pickle(file_path)
-
+            # Standardize name extraction
             if isinstance(names_data, pd.DataFrame):
-                if 'EmployeeName' in names_data.columns:
-                    names = names_data['EmployeeName'].tolist()
-                elif not names_data.empty:
-                    names = names_data.iloc[:, 0].tolist()
-                else:
-                    names = names_data.index.tolist()
-            elif isinstance(names_data, list):
-                names = names_data
+                names = names_data['EmployeeName'].tolist() if 'EmployeeName' in names_data.columns else \
+                names_data.iloc[:, 0].tolist()
             else:
                 names = list(names_data)
 
-            if not names:
-                raise ValueError("The selected file does not contain any readable employee names.")
+            # Create the Analysis Display Window
+            analysis_win = tk.Toplevel(self.root)
+            analysis_win.title("Employee Performance Analysis")
+            analysis_win.geometry("400x400")
 
-            self.employee_names = names
-            self.save_folder = folder_dir
+            txt_display = scrolledtext.ScrolledText(analysis_win, wrap="word", font=("Courier New", 10))
+            txt_display.pack(fill="both", expand=True, padx=10, pady=10)
 
-            for name in self.employee_names:
+            for name in names:
                 pickle_file = os.path.join(folder_dir, f"{name}.pickle")
-
                 if os.path.exists(pickle_file):
                     f = pd.read_pickle(pickle_file)
-
                     if 'results' in f and 'target_dict' in f:
                         self.results = f['results'].to_dict()
                         self.target_dict = f['target_dict'].to_dict()
 
-                        print(f"\n--- Schedule Status For: {name} ---")
-                        self.process_data(period)
+                        # Calculate logic
+                        a = sum(self.results.values())
+                        total_tasks = len(self.results.keys())
+                        percentage = 0
+                        if a < total_tasks and a != 0:
+                            percentage = (total_tasks - a) / total_tasks / period * 100
+                        elif a == 0:
+                            percentage = 1 / period * 100
+
+                        txt_display.insert(tk.END, f"Employee: {name}\n")
+                        txt_display.insert(tk.END, f"Tasks Remaining: {total_tasks - a}/{total_tasks}\n")
+                        txt_display.insert(tk.END, f"% to do today: {percentage:.2f}%\n")
+                        txt_display.insert(tk.END, "-" * 40 + "\n")
                     else:
-                        print(
-                            f"\n[Warning] File for {name} exists, but lacks 'results' or 'target_dict' data structures.")
+                        txt_display.insert(tk.END, f"{name}: Data structure missing.\n" + "-" * 40 + "\n")
                 else:
-                    print(f"\nSchedule file for {name} not found.")
+                    txt_display.insert(tk.END, f"{name}: Schedule file not found.\n" + "-" * 40 + "\n")
+
+            txt_display.config(state="disabled")
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not read schedules: {e}")
-
+            
+            
     def check_todo_list(self):
         """Loads names.pickle, opens individual employee files, and displays their details in a UI window."""
         file_path = filedialog.askopenfilename(
@@ -534,4 +541,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = Administrator(root)
     root.mainloop()
-    

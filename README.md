@@ -1,5 +1,6 @@
 All class files are copy paste into the console and runs with pandas, tkinter and requests downloaded.
-Backend takes setting up
+Backend takes setting up.
+Files were updated to be .csv's instead of .pickle. This is a file type that gemini can read, allowing for the whole workflow to be uploaded and worked through.
 
 Setting up a python enviorment:
     

@@ -15,7 +15,7 @@ class Administrator:
     def __init__(self, root):
         self.root = root
         self.root.title("Main Window")
-        self.root.geometry("450x500")  # Slightly wider to accommodate labels
+        self.root.geometry("450x500")
 
         # Core Data Storage
         self.target_dict = {}
@@ -27,7 +27,7 @@ class Administrator:
         self.employee_names = []
         self.current_employee_index = 0
         self.save_folder = ""
-        self.is_updating_single = False  # Track if we are modifying only one employee
+        self.is_updating_single = False
 
         # OAuth / Stripe configuration & user state
         self.user_id = str(uuid.uuid4())
@@ -40,59 +40,43 @@ class Administrator:
         self.start()
 
     def start(self):
-        # Configure uniform weight for columns and rows to distribute space evenly
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_rowconfigure(1, weight=1)
 
-        # Row 0, Column 0: Populate Employee
         btn_a = tk.Button(self.root, text="Populate employee", command=self.get_cards, padx=10, pady=5)
         btn_a.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
 
-        # Row 0, Column 1: Make Schedule
         btn_b = tk.Button(self.root, text="Make employee schedule", command=self.assign_schedule, padx=10, pady=5)
         btn_b.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
 
-        # Row 1, Column 0: Check Schedule (Opens the new choice window)
         btn_c = tk.Button(self.root, text="Check on employee", command=self.check_on_schedule, padx=15, pady=5)
         btn_c.grid(row=1, column=0, padx=20, pady=20, sticky="nsew")
 
-        # Row 1, Column 1: Purchase & Open Cloud Dictionary (Integrated Client)
         self.btn_d = tk.Button(self.root, text="Purchase & Open Dictionary", command=self.start_purchase_flow, padx=15,
                                pady=5, bg="green", fg="white")
         self.btn_d.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
 
     def start_purchase_flow(self):
-        """Disables the button and opens the Stripe gateway url on your local/cloud backend"""
         self.btn_d.config(state="disabled", text="Waiting for payment...", bg="orange")
-
-        # Open default web browser to the server checkout redirection endpoint
         webbrowser.open(f"{self.backend_url}/buy/{self.user_id}")
-
-        # Spin up background verification loop so the Tkinter UI doesn't freeze up
         threading.Thread(target=self.poll_for_auth, daemon=True).start()
 
     def poll_for_auth(self):
-        """Asynchronously monitors the secure backend until a Stripe webhook validates the asset release"""
         while True:
             try:
                 response = requests.get(f"{self.backend_url}/get-dictionary/{self.user_id}")
                 if response.status_code == 200:
                     dictionary_payload = response.json()
-                    # Hand data payload execution back to main loop to handle safe window updates
                     self.root.after(0, self.open_dictionary_window, dictionary_payload)
                     break
             except requests.exceptions.ConnectionError:
-                # Backend server isn't running yet, or network dropped briefly. Rest and retry.
                 pass
-
             time.sleep(2)
 
     def open_dictionary_window(self, data):
-        """Re-enables dashboard controls and renders the retrieved data to an explicit UI view window"""
         self.btn_d.config(state="normal", text="Purchase & Open Dictionary", bg="green")
-
         new_window = tk.Toplevel(self.root)
         new_window.title("Purchased Cloud Dictionary Data")
         new_window.geometry("400x300")
@@ -100,14 +84,12 @@ class Administrator:
         text_widget = tk.Text(new_window, wrap="word")
         text_widget.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Display the custom payload dictionary cleanly
         for key, val in data.items():
             text_widget.insert(tk.END, f"【{key}】: {val}\n\n")
 
-        text_widget.config(state="disabled")  # Set content frame to read-only
+        text_widget.config(state="disabled")
 
     def launch(self):
-        """Creates or updates the independent classification window."""
         if not self.class_win or not self.class_win.winfo_exists():
             self.class_win = tk.Toplevel(self.root)
             self.class_win.geometry("350x200")
@@ -164,7 +146,18 @@ class Administrator:
     def finish_employee_classification(self):
         """Saves current employee results and evaluates if there are more employees left."""
         current_emp = self.employee_names[self.current_employee_index]
-        self.save(self.save_folder, current_emp)
+
+        # FIX: Construct a paired dataset containing the target task description values alongside your True/False response logs
+        combined_payload = []
+        for task, status_val in self.results.items():
+            combined_payload.append({
+                "Task": task,
+                "Value": self.target_dict.get(task, ""),
+                "Status": status_val
+            })
+
+        # FIX: Directly route the exact target employee identifier and payload structure
+        self.save(current_emp, combined_payload)
         print(f"Saved schedule for {current_emp}")
 
         self.current_employee_index += 1
@@ -176,10 +169,10 @@ class Administrator:
             if self.class_win and self.class_win.winfo_exists():
                 self.class_win.destroy()
 
-            # Prevent overwriting standard master name files if we were only targeting one update loop
             if not self.is_updating_single:
+                # FIX: Swapped legacy .to_pickle call with clean to_csv master handler layout
                 names_df = pd.DataFrame(self.employee_names, columns=['EmployeeName'])
-                names_df.to_pickle(os.path.join(self.save_folder, "names.pickle"))
+                names_df.to_csv(os.path.join(self.save_folder, "names.csv"), index=False, encoding="utf-8")
                 messagebox.showinfo("Done!", "All employee schedules generated and saved successfully!")
             else:
                 self.is_updating_single = False
@@ -219,28 +212,56 @@ class Administrator:
             print("% to do today: " + str(remaining_tasks / total_tasks / period * 100))
 
     def update(self, folder, name):
-        pickle_file = os.path.join(folder, f"{name}.pickle")
-        if os.path.exists(pickle_file):
-            self.load_data(pickle_file)
+        # FIX: Swapped out legacy string references
+        csv_file = os.path.join(folder, f"{name}.csv")
+        if os.path.exists(csv_file):
+            self.load_data(name)
             self.next_key()
-            self.save(folder, name)
+            # FIX: Explicit variable mapping parameters passed
+            self.save(name, self.results)
         else:
             print(f"Schedule file for {name} not found.")
 
-    def load_data(self, file_path):
-        f = pd.read_pickle(file_path)
-        self.results = {}
-        self.target_dict = {}
-        if 'results' in f and 'target_dict' in f:
-            self.results = f['results'].to_dict()
-            self.target_dict = f['target_dict'].to_dict()
-        self.keys_iterator = iter(self.target_dict.keys())
+    def load_data(self, name_tag):
+        """Directly opens the targeted employee CSV file using their identifier name tag."""
+        # FIX: Set up relative path awareness based on application's state directory
+        file_name = os.path.join(self.save_folder, f"{name_tag}.csv") if self.save_folder else f"{name_tag}.csv"
 
-    def save(self, folder, name):
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-        df = pd.DataFrame({'results': self.results, 'target_dict': self.target_dict})
-        df.to_pickle(os.path.join(folder, f"{name}.pickle"))
+        if not os.path.exists(file_name):
+            return f"[File Not Found] No saved CSV schedule exists for: {file_name}"
+
+        try:
+            df = pd.read_csv(file_name, encoding="utf-8")
+
+            # Repopulate system dict states so updating records works gracefully
+            if "Task" in df.columns and "Status" in df.columns:
+                self.results = dict(zip(df["Task"], df["Status"]))
+                if "Value" in df.columns:
+                    self.target_dict = dict(zip(df["Task"], df["Value"]))
+
+            output_text = ""
+            for _, row in df.iterrows():
+                for column, value in row.items():
+                    output_text += f"{column}: {value}\n"
+                output_text += "-" * 30 + "\n"
+
+            return output_text
+
+        except Exception as e:
+            return f"Error reading schedule CSV: {e}"
+
+    def save(self, name_tag, data_payload):
+        """Directly saves the passed data into a explicitly named CSV file."""
+        try:
+            # FIX: Correctly maps destination directory paths from class state
+            file_name = os.path.join(self.save_folder, f"{name_tag}.csv") if self.save_folder else f"{name_tag}.csv"
+
+            df = pd.DataFrame(data_payload)
+            df.to_csv(file_name, index=False, encoding="utf-8")
+            print(f"Successfully saved to CSV: {file_name}")
+
+        except Exception as e:
+            print(f"Error saving to CSV: {e}")
 
     def get_employee_data(self):
         num_employees = simpledialog.askinteger("Employee Count", "How many employees do you have?", minvalue=1,
@@ -257,20 +278,20 @@ class Administrator:
                 break
             employee_list.append(name.strip() if name.strip() else f"Employee_{i + 1}")
 
+        # FIX: Prompts default files to target clean CSV storage tracks out of the box
         file_path = filedialog.asksaveasfilename(
             title="Select File Location to Save Employees",
             parent=self.root,
-            initialfile="employees.txt",
-            defaultextension=".txt",
-            filetypes=[("Text Files", "*.txt"), ("CSV Files", "*.csv"), ("All Files", "*.*")]
+            initialfile="names.csv",
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv"), ("Text Files", "*.txt"), ("All Files", "*.*")]
         )
         return employee_list, file_path
 
     def check_on_schedule(self):
-        """Pulls up an intermediate window offering Analysis, To-Do list views, or status updates."""
         choice_win = tk.Toplevel(self.root)
         choice_win.title("Employee Options")
-        choice_win.geometry("480x140")  # Widened layout setup to naturally adapt 3 items
+        choice_win.geometry("480x140")
 
         lbl = tk.Label(choice_win, text="Choose an option for the employee:", font=("Arial", 11))
         lbl.pack(pady=15)
@@ -278,27 +299,24 @@ class Administrator:
         btn_frame = tk.Frame(choice_win)
         btn_frame.pack(pady=5)
 
-        # Run Analysis Button
         btn_analysis = tk.Button(btn_frame, text="Run analysis", width=14,
                                  command=lambda: [choice_win.destroy(), self.run_analysis()])
         btn_analysis.pack(side=tk.LEFT, padx=10)
 
-        # Check To Do List Button
         btn_todo = tk.Button(btn_frame, text="Check to do list", width=14,
                              command=lambda: [choice_win.destroy(), self.check_todo_list()])
         btn_todo.pack(side=tk.LEFT, padx=10)
 
-        # Update Status Button (NEW)
         btn_update = tk.Button(btn_frame, text="Update status", width=14,
                                command=lambda: [choice_win.destroy(), self.prompt_update_status()])
         btn_update.pack(side=tk.LEFT, padx=10)
 
     def run_analysis(self):
-        """Displays metric performance in a pop-up window instead of the console."""
+        # FIX: Swapped legacy extension validation to seek out the clean csv tracker path
         file_path = filedialog.askopenfilename(
-            title="Select the 'names.pickle' file to check schedules",
+            title="Select the 'names.csv' file to check schedules",
             parent=self.root,
-            filetypes=[("Pickle Files", "*.pickle"), ("All Files", "*.*")]
+            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
         )
         if not file_path:
             return
@@ -317,15 +335,11 @@ class Administrator:
 
         folder_dir = os.path.dirname(file_path)
         try:
-            names_data = pd.read_pickle(file_path)
-            # Standardize name extraction
-            if isinstance(names_data, pd.DataFrame):
-                names = names_data['EmployeeName'].tolist() if 'EmployeeName' in names_data.columns else \
-                names_data.iloc[:, 0].tolist()
-            else:
-                names = list(names_data)
+            # FIX: Replaced read_pickle configuration block
+            names_df = pd.read_csv(file_path, encoding="utf-8")
+            names = names_df['EmployeeName'].tolist() if 'EmployeeName' in names_df.columns else names_df.iloc[
+                :, 0].tolist()
 
-            # Create the Analysis Display Window
             analysis_win = tk.Toplevel(self.root)
             analysis_win.title("Employee Performance Analysis")
             analysis_win.geometry("400x400")
@@ -334,16 +348,13 @@ class Administrator:
             txt_display.pack(fill="both", expand=True, padx=10, pady=10)
 
             for name in names:
-                pickle_file = os.path.join(folder_dir, f"{name}.pickle")
-                if os.path.exists(pickle_file):
-                    f = pd.read_pickle(pickle_file)
-                    if 'results' in f and 'target_dict' in f:
-                        self.results = f['results'].to_dict()
-                        self.target_dict = f['target_dict'].to_dict()
-
-                        # Calculate logic
-                        a = sum(self.results.values())
-                        total_tasks = len(self.results.keys())
+                # FIX: Redirected lookup targeting CSV files
+                csv_file = os.path.join(folder_dir, f"{name}.csv")
+                if os.path.exists(csv_file):
+                    df_emp = pd.read_csv(csv_file, encoding="utf-8")
+                    if 'Status' in df_emp.columns and 'Task' in df_emp.columns:
+                        a = df_emp['Status'].sum()
+                        total_tasks = len(df_emp)
                         percentage = 0
                         if a < total_tasks and a != 0:
                             percentage = (total_tasks - a) / total_tasks / period * 100
@@ -355,7 +366,7 @@ class Administrator:
                         txt_display.insert(tk.END, f"% to do today: {percentage:.2f}%\n")
                         txt_display.insert(tk.END, "-" * 40 + "\n")
                     else:
-                        txt_display.insert(tk.END, f"{name}: Data structure missing.\n" + "-" * 40 + "\n")
+                        txt_display.insert(tk.END, f"{name}: Data structure columns missing.\n" + "-" * 40 + "\n")
                 else:
                     txt_display.insert(tk.END, f"{name}: Schedule file not found.\n" + "-" * 40 + "\n")
 
@@ -363,38 +374,27 @@ class Administrator:
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not read schedules: {e}")
-            
-            
+
     def check_todo_list(self):
-        """Loads names.pickle, opens individual employee files, and displays their details in a UI window."""
+        # FIX: Swapped out legacy lookup path configurations
         file_path = filedialog.askopenfilename(
-            title="Select the 'names.pickle' file to view lists",
+            title="Select the 'names.csv' file to view lists",
             parent=self.root,
-            filetypes=[("Pickle Files", "*.pickle"), ("All Files", "*.*")]
+            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
         )
         if not file_path:
             return
 
         folder_dir = os.path.dirname(file_path)
         try:
-            names_data = pd.read_pickle(file_path)
-
-            if isinstance(names_data, pd.DataFrame):
-                if 'EmployeeName' in names_data.columns:
-                    names = names_data['EmployeeName'].tolist()
-                elif not names_data.empty:
-                    names = names_data.iloc[:, 0].tolist()
-                else:
-                    names = names_data.index.tolist()
-            elif isinstance(names_data, list):
-                names = names_data
-            else:
-                names = list(names_data)
+            # FIX: Replaced read_pickle format engine references
+            names_df = pd.read_csv(file_path, encoding="utf-8")
+            names = names_df['EmployeeName'].tolist() if 'EmployeeName' in names_df.columns else names_df.iloc[
+                :, 0].tolist()
 
             if not names:
                 raise ValueError("The selected file does not contain any readable employee names.")
 
-            # Set up the Display Window for the Schedules
             todo_win = tk.Toplevel(self.root)
             todo_win.title("Employee Tasks and Schedules")
             todo_win.geometry("450x400")
@@ -403,66 +403,57 @@ class Administrator:
             txt_display.pack(fill="both", expand=True, padx=10, pady=10)
 
             for name in names:
-                pickle_file = os.path.join(folder_dir, f"{name}.pickle")
+                # FIX: Looks up individual CSV data tables explicitly
+                csv_file = os.path.join(folder_dir, f"{name}.csv")
                 txt_display.insert(tk.END, f"=========================================\n")
                 txt_display.insert(tk.END, f" EMPLOYEE: {name}\n")
                 txt_display.insert(tk.END, f"=========================================\n")
 
-                if os.path.exists(pickle_file):
-                    f = pd.read_pickle(pickle_file)
+                if os.path.exists(csv_file):
+                    df_emp = pd.read_csv(csv_file, encoding="utf-8")
 
-                    if 'results' in f and 'target_dict' in f:
-                        emp_results = f['results'].to_dict()
-                        emp_targets = f['target_dict'].to_dict()
-
+                    if 'Status' in df_emp.columns and 'Task' in df_emp.columns:
                         txt_display.insert(tk.END, f"{'Task Name':<25} | {'Value':<10} | {'Status':<10}\n")
                         txt_display.insert(tk.END, f"{'-' * 25}-|-{'-' * 10}-|-{'-' * 10}\n")
 
-                        for task, value in emp_targets.items():
-                            choice = emp_results.get(task, 0)
+                        for _, row in df_emp.iterrows():
+                            task = row['Task']
+                            value = row.get('Value', '')
+                            choice = row['Status']
                             status_str = "Completed" if choice == 1 else "To-Do"
-                            txt_display.insert(tk.END, f"{task:<25} | {str(value):<10} | {status_str:<10}\n")
+                            txt_display.insert(tk.END, f"{str(task):<25} | {str(value):<10} | {status_str:<10}\n")
                     else:
-                        txt_display.insert(tk.END, "[Warning] Missing 'results' or 'target_dict' arrays.\n")
+                        txt_display.insert(tk.END, "[Warning] Missing 'Status' or 'Task' columns.\n")
                 else:
-                    txt_display.insert(tk.END, "[File Not Found] No saved schedule pickle exists.\n")
+                    txt_display.insert(tk.END, "[File Not Found] No saved CSV schedule exists.\n")
 
                 txt_display.insert(tk.END, "\n\n")
 
-            txt_display.config(state="disabled")  # Set read-only
+            txt_display.config(state="disabled")
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not read schedules: {e}")
 
     def prompt_update_status(self):
-        """Loads names.pickle, lets user select exactly ONE employee, and executes their status updates."""
+        # FIX: Explicit targets mapped to fetch clean CSV structures
         file_path = filedialog.askopenfilename(
-            title="Select 'names.pickle' to fetch current employee roster",
+            title="Select 'names.csv' to fetch current employee roster",
             parent=self.root,
-            filetypes=[("Pickle Files", "*.pickle"), ("All Files", "*.*")]
+            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
         )
         if not file_path:
             return
 
         folder_dir = os.path.dirname(file_path)
         try:
-            names_data = pd.read_pickle(file_path)
-            if isinstance(names_data, pd.DataFrame):
-                if 'EmployeeName' in names_data.columns:
-                    names = names_data['EmployeeName'].tolist()
-                elif not names_data.empty:
-                    names = names_data.iloc[:, 0].tolist()
-                else:
-                    names = names_data.index.tolist()
-            elif isinstance(names_data, list):
-                names = names_data
-            else:
-                names = list(names_data)
+            # FIX: Cleared out old pickle read loops
+            names_df = pd.read_csv(file_path, encoding="utf-8")
+            names = names_df['EmployeeName'].tolist() if 'EmployeeName' in names_df.columns else names_df.iloc[
+                :, 0].tolist()
 
             if not names:
                 raise ValueError("No active names found in file.")
 
-            # Create selector interface window frame
             select_win = tk.Toplevel(self.root)
             select_win.title("Select Employee to Update")
             select_win.geometry("320x280")
@@ -484,17 +475,19 @@ class Administrator:
                 selected_name = listbox.get(selection[0])
                 select_win.destroy()
 
-                pickle_file = os.path.join(folder_dir, f"{selected_name}.pickle")
-                if os.path.exists(pickle_file):
+                # FIX: Direct targets tracking down CSV schedules
+                csv_file = os.path.join(folder_dir, f"{selected_name}.csv")
+                if os.path.exists(csv_file):
                     self.is_updating_single = True
                     self.employee_names = [selected_name]
                     self.current_employee_index = 0
                     self.save_folder = folder_dir
 
-                    self.load_data(pickle_file)
+                    self.load_data(selected_name)
+                    self.keys_iterator = iter(self.target_dict.keys())
                     self.next_key()
                 else:
-                    messagebox.showerror("Error", f"Pickle file record not found for: {selected_name}")
+                    messagebox.showerror("Error", f"CSV file record not found for: {selected_name}")
 
             btn_confirm = tk.Button(select_win, text="Select Profile", command=on_confirm)
             btn_confirm.pack(pady=10)
@@ -541,3 +534,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = Administrator(root)
     root.mainloop()
+    

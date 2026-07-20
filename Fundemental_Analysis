@@ -1,0 +1,95 @@
+import numpy as np
+import pandas as pd
+import yfinance as yf
+
+
+def extract_info_metrics(ticker_symbol: str) -> dict | None:
+    """Safely extracts key metrics from yfinance ticker.info dictionary."""
+    try:
+        info = yf.Ticker(ticker_symbol).info
+        if not info or "currentPrice" not in info:
+            return None
+
+        return {
+            "ticker": ticker_symbol,
+            "current_price": info.get("currentPrice"),
+            "market_cap": info.get("marketCap", 0),
+            "peg_ratio": info.get("pegRatio"),
+            "roe": info.get("returnOnEquity"),
+            "profit_margins": info.get("profitMargins"),
+            "revenue_growth": info.get("revenueGrowth"),
+            "rec_mean": info.get("recommendationMean"), # 1 (Buy) to 5 (Sell)
+            "target_price": info.get("targetMeanPrice"),
+            "debt_to_equity": info.get("debtToEquity"),
+        }
+    except Exception:
+        return None
+
+
+def evaluate_candidates(tickers: list[str], min_score_threshold: float = 0.60) -> list[str]:
+    """Processes 3-10 tickers and returns 0, 1, or 2 selected stocks."""
+    # 1. Fetch data & apply hard quality filters
+    raw_data = [extract_info_metrics(t) for t in tickers]
+    valid_data = [d for d in raw_data if d is not None]
+
+    filtered = []
+    for d in valid_data:
+        # Hard filters: Drop illiquid, highly leveraged, or missing key metrics
+        if (d["debt_to_equity"] and d["debt_to_equity"] > 250) or (
+            d["profit_margins"] is None or d["profit_margins"] < 0
+        ):
+            continue
+        filtered.append(d)
+
+    # Return 0 if no stocks pass hard filters
+    if not filtered:
+        return []
+
+    df = pd.DataFrame(filtered)
+
+    # 2. Derive relative scoring features
+    df["upside"] = (
+        (df["target_price"] - df["current_price"]) / df["current_price"]
+    ).fillna(0)
+
+    # Percentile ranks (0.0 to 1.0 scale)
+    df["val_score"] = 1 - df["peg_ratio"].rank(pct=True, ascending=True).fillna(
+        0.5
+    )
+    df["qual_score"] = (
+        df["roe"].rank(pct=True).fillna(0.5)
+        + df["profit_margins"].rank(pct=True).fillna(0.5)
+    ) / 2
+    df["growth_score"] = df["revenue_growth"].rank(pct=True).fillna(0.5)
+    df["sent_score"] = 1 - df["rec_mean"].rank(
+        pct=True, ascending=True
+    ).fillna(0.5)
+    df["upside_score"] = df["upside"].rank(pct=True).fillna(0.5)
+
+    # Composite Score calculation
+    df["composite_score"] = (
+        0.25 * df["val_score"]
+        + 0.25 * df["qual_score"]
+        + 0.20 * df["growth_score"]
+        + 0.15 * df["sent_score"]
+        + 0.15 * df["upside_score"]
+    )
+
+    df = df.sort_values(by="composite_score", ascending=False).reset_index(
+        drop=True
+    )
+
+    # 3. Dynamic Selection Logic (0, 1, or 2 stocks)
+    top_candidates = df[df["composite_score"] >= min_score_threshold]
+
+    if len(top_candidates) == 0:
+        return [] # Select 0 stocks
+    elif len(top_candidates) == 1:
+        return top_candidates["ticker"].tolist() # Select 1 stock
+    else:
+        # If top 2 are both strong, return top 2
+        return top_candidates["ticker"].iloc[:2].tolist()
+
+
+
+a = evaluate_candidates(['AAPL', 'TSLA', 'MSFT', 'COHR', 'OMEX', 'CIA'])

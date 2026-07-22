@@ -1,0 +1,131 @@
+import json
+import tkinter as tk
+from tkinter import messagebox, scrolledtext
+import webbrowser
+import requests
+
+
+class DictionaryUpdaterGUI:
+    """Tkinter GUI client to authenticate and send dictionary updates to Backend."""
+
+    def __init__(self, root, backend_url: str = "http://127.0.0.1:8000"):
+        self.root = root
+        self.backend_url = backend_url
+
+        self.root.title("Dictionary Updater Portal Login")
+        self.root.geometry("450x420")
+        self.root.resizable(False, False)
+
+        self._build_ui()
+
+    def _build_ui(self):
+        """Constructs the user interface elements."""
+        # Username Label & Entry
+        tk.Label(self.root, text="Username:", font=("Arial", 10, "bold")).pack(anchor="w", padx=20, pady=(15, 2))
+        self.entry_user = tk.Entry(self.root, width=50)
+        self.entry_user.pack(padx=20, pady=2)
+        self.entry_user.insert(0, "admin")
+
+        # Password Label & Entry
+        tk.Label(self.root, text="Password:", font=("Arial", 10, "bold")).pack(anchor="w", padx=20, pady=(10, 2))
+        self.entry_pass = tk.Entry(self.root, show="*", width=50)
+        self.entry_pass.pack(padx=20, pady=2)
+
+        # Dictionary Payload Label & Textbox
+        tk.Label(self.root, text="Dictionary JSON Payload:", font=("Arial", 10, "bold")).pack(anchor="w", padx=20,
+                                                                                              pady=(10, 2))
+        self.txt_payload = scrolledtext.ScrolledText(self.root, width=50, height=8, font=("Consolas", 9))
+        self.txt_payload.pack(padx=20, pady=2)
+        self.txt_payload.insert(tk.END, '{\n  "eth": "Ethereum crypto coin",\n  "banana": "A yellow sweet fruit"\n}')
+
+        # Action Buttons Frame
+        btn_frame = tk.Frame(self.root)
+        btn_frame.pack(pady=15)
+
+        btn_submit = tk.Button(
+            btn_frame,
+            text="Submit & Update",
+            command=self.submit_update,
+            bg="#28a745",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            padx=10,
+            pady=4
+        )
+        btn_submit.pack(side=tk.LEFT, padx=10)
+
+        btn_browse = tk.Button(
+            btn_frame,
+            text="Open Web Portal",
+            command=self.open_browser,
+            bg="#007bff",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            padx=10,
+            pady=4
+        )
+        btn_browse.pack(side=tk.LEFT, padx=10)
+
+    def submit_update(self):
+        """Validates inputs and submits form data to the FastAPI backend server."""
+        username = self.entry_user.get().strip()
+        password = self.entry_pass.get().strip()
+        raw_payload = self.txt_payload.get("1.0", tk.END).strip()
+
+        if not username or not password:
+            messagebox.showwarning("Missing Credentials", "Please enter both username and password.")
+            return
+
+        # Validate local JSON format prior to sending
+        try:
+            json.loads(raw_payload)
+        except json.JSONDecodeError as err:
+            messagebox.showerror("JSON Format Error", f"Invalid JSON payload syntax:\n{err}")
+            return
+
+        # Prepare form body request payload
+        form_payload = {
+            "username": username,
+            "password": password,
+            "dict_payload": raw_payload
+        }
+
+        target_url = f"{self.backend_url}/dict-updater/submit"
+
+        try:
+            response = requests.post(target_url, data=form_payload, timeout=5)
+
+            if response.status_code == 200:
+                res_data = response.json()
+                messagebox.showinfo(
+                    "Update Success",
+                    f"Message: {res_data.get('message')}\n\n"
+                    f"Current Server Storage:\n{json.dumps(res_data.get('updated_data'), indent=2)}"
+                )
+            else:
+                detail = response.json().get("detail", "Unknown server error")
+                messagebox.showerror("Server Error", f"Status {response.status_code}: {detail}")
+
+        except requests.exceptions.ConnectionError:
+            messagebox.showerror(
+                "Connection Failed",
+                f"Could not connect to FastAPI server at {self.backend_url}.\n"
+                "Ensure `Cloud.py` server script is currently running."
+            )
+
+    def open_browser(self):
+        """Opens the web-based dict-updater portal directly in the default browser."""
+        portal_url = f"{self.backend_url}/dict-updater"
+        webbrowser.open(portal_url)
+
+
+def launch_updater_gui():
+    """Entry point function to launch window directly from Python interactive shell."""
+    root = tk.Tk()
+    app = DictionaryUpdaterGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    launch_updater_gui()
+    

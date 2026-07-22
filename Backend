@@ -18,6 +18,7 @@ class Backend:
         # 2. Initialize Stripe Configurations
         stripe.api_key = "sk_test_..."
         self.ENDPOINT_SECRET = "whsec_..."
+        self.account = {"Name":"AdminForce","Password":"asdfgfewer"}
 
         # 3. Initialize FastAPI App instance
         self.app = FastAPI(title="Secure Dictionary Auth API")
@@ -174,15 +175,19 @@ class Backend:
                 raise ValueError
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid JSON dictionary format.")
+	if self.account["Name"] == username and self.account["Password"] == password:
+            # Update in-memory dictionary data
+            self.DICTIONARY_DATA.update(parsed_dict)
 
-        # Update in-memory dictionary data
-        self.DICTIONARY_DATA.update(parsed_dict)
-
+            return {
+                "status": "success",
+                "message": f"Dictionary updated successfully by {username}.",
+                "updated_data": self.DICTIONARY_DATA
+            }
         return {
-            "status": "success",
-            "message": f"Dictionary updated successfully by {username}.",
-            "updated_data": self.DICTIONARY_DATA
-        }
+           "status": "Failure",
+           "message": f"Dictionary updated failed to upload by {username}."}
+
 
     def run_server(self):
         """Boots up the unified Uvicorn server hosting all routes."""

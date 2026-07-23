@@ -60,17 +60,27 @@ class Administrator:
 
     def start_purchase_flow(self):
         self.btn_d.config(state="disabled", text="Waiting for payment...", bg="orange")
-        webbrowser.open(f"{self.backend_url}/buy/{self.user_id}")
+        # Opens Web 1 directly in browser
+        webbrowser.open(f"{self.backend_url}/")
         threading.Thread(target=self.poll_for_auth, daemon=True).start()
 
     def poll_for_auth(self):
         while True:
             try:
-                response = requests.get(f"{self.backend_url}/get-dictionary/{self.user_id}")
+                # 1. Poll for claimed JWT token once payment completes
+                response = requests.get(f"{self.backend_url}/claim-token/{self.user_id}")
                 if response.status_code == 200:
-                    dictionary_payload = response.json()
-                    self.root.after(0, self.open_dictionary_window, dictionary_payload)
-                    break
+                    token_data = response.json()
+                    access_token = token_data.get("access_token")
+
+                    # 2. Use bearer token to request protected dictionary
+                    headers = {"Authorization": f"Bearer {access_token}"}
+                    dict_response = requests.get(f"{self.backend_url}/get-dictionary", headers=headers)
+
+                    if dict_response.status_code == 200:
+                        dictionary_payload = dict_response.json()
+                        self.root.after(0, self.open_dictionary_window, dictionary_payload)
+                        break
             except requests.exceptions.ConnectionError:
                 pass
             time.sleep(2)
@@ -144,10 +154,8 @@ class Administrator:
             self.next_key()
 
     def finish_employee_classification(self):
-        """Saves current employee results and evaluates if there are more employees left."""
         current_emp = self.employee_names[self.current_employee_index]
 
-        # FIX: Construct a paired dataset containing the target task description values alongside your True/False response logs
         combined_payload = []
         for task, status_val in self.results.items():
             combined_payload.append({
@@ -156,7 +164,6 @@ class Administrator:
                 "Status": status_val
             })
 
-        # FIX: Directly route the exact target employee identifier and payload structure
         self.save(current_emp, combined_payload)
         print(f"Saved schedule for {current_emp}")
 
@@ -170,7 +177,6 @@ class Administrator:
                 self.class_win.destroy()
 
             if not self.is_updating_single:
-                # FIX: Swapped legacy .to_pickle call with clean to_csv master handler layout
                 names_df = pd.DataFrame(self.employee_names, columns=['EmployeeName'])
                 names_df.to_csv(os.path.join(self.save_folder, "names.csv"), index=False, encoding="utf-8")
                 messagebox.showinfo("Done!", "All employee schedules generated and saved successfully!")
@@ -212,19 +218,15 @@ class Administrator:
             print("% to do today: " + str(remaining_tasks / total_tasks / period * 100))
 
     def update(self, folder, name):
-        # FIX: Swapped out legacy string references
         csv_file = os.path.join(folder, f"{name}.csv")
         if os.path.exists(csv_file):
             self.load_data(name)
             self.next_key()
-            # FIX: Explicit variable mapping parameters passed
             self.save(name, self.results)
         else:
             print(f"Schedule file for {name} not found.")
 
     def load_data(self, name_tag):
-        """Directly opens the targeted employee CSV file using their identifier name tag."""
-        # FIX: Set up relative path awareness based on application's state directory
         file_name = os.path.join(self.save_folder, f"{name_tag}.csv") if self.save_folder else f"{name_tag}.csv"
 
         if not os.path.exists(file_name):
@@ -233,7 +235,6 @@ class Administrator:
         try:
             df = pd.read_csv(file_name, encoding="utf-8")
 
-            # Repopulate system dict states so updating records works gracefully
             if "Task" in df.columns and "Status" in df.columns:
                 self.results = dict(zip(df["Task"], df["Status"]))
                 if "Value" in df.columns:
@@ -251,9 +252,7 @@ class Administrator:
             return f"Error reading schedule CSV: {e}"
 
     def save(self, name_tag, data_payload):
-        """Directly saves the passed data into a explicitly named CSV file."""
         try:
-            # FIX: Correctly maps destination directory paths from class state
             file_name = os.path.join(self.save_folder, f"{name_tag}.csv") if self.save_folder else f"{name_tag}.csv"
 
             df = pd.DataFrame(data_payload)
@@ -278,7 +277,6 @@ class Administrator:
                 break
             employee_list.append(name.strip() if name.strip() else f"Employee_{i + 1}")
 
-        # FIX: Prompts default files to target clean CSV storage tracks out of the box
         file_path = filedialog.asksaveasfilename(
             title="Select File Location to Save Employees",
             parent=self.root,
@@ -312,7 +310,6 @@ class Administrator:
         btn_update.pack(side=tk.LEFT, padx=10)
 
     def run_analysis(self):
-        # FIX: Swapped legacy extension validation to seek out the clean csv tracker path
         file_path = filedialog.askopenfilename(
             title="Select the 'names.csv' file to check schedules",
             parent=self.root,
@@ -335,7 +332,6 @@ class Administrator:
 
         folder_dir = os.path.dirname(file_path)
         try:
-            # FIX: Replaced read_pickle configuration block
             names_df = pd.read_csv(file_path, encoding="utf-8")
             names = names_df['EmployeeName'].tolist() if 'EmployeeName' in names_df.columns else names_df.iloc[
                 :, 0].tolist()
@@ -348,7 +344,6 @@ class Administrator:
             txt_display.pack(fill="both", expand=True, padx=10, pady=10)
 
             for name in names:
-                # FIX: Redirected lookup targeting CSV files
                 csv_file = os.path.join(folder_dir, f"{name}.csv")
                 if os.path.exists(csv_file):
                     df_emp = pd.read_csv(csv_file, encoding="utf-8")
@@ -376,7 +371,6 @@ class Administrator:
             messagebox.showerror("Error", f"Could not read schedules: {e}")
 
     def check_todo_list(self):
-        # FIX: Swapped out legacy lookup path configurations
         file_path = filedialog.askopenfilename(
             title="Select the 'names.csv' file to view lists",
             parent=self.root,
@@ -387,7 +381,6 @@ class Administrator:
 
         folder_dir = os.path.dirname(file_path)
         try:
-            # FIX: Replaced read_pickle format engine references
             names_df = pd.read_csv(file_path, encoding="utf-8")
             names = names_df['EmployeeName'].tolist() if 'EmployeeName' in names_df.columns else names_df.iloc[
                 :, 0].tolist()
@@ -403,7 +396,6 @@ class Administrator:
             txt_display.pack(fill="both", expand=True, padx=10, pady=10)
 
             for name in names:
-                # FIX: Looks up individual CSV data tables explicitly
                 csv_file = os.path.join(folder_dir, f"{name}.csv")
                 txt_display.insert(tk.END, f"=========================================\n")
                 txt_display.insert(tk.END, f" EMPLOYEE: {name}\n")
@@ -435,7 +427,6 @@ class Administrator:
             messagebox.showerror("Error", f"Could not read schedules: {e}")
 
     def prompt_update_status(self):
-        # FIX: Explicit targets mapped to fetch clean CSV structures
         file_path = filedialog.askopenfilename(
             title="Select 'names.csv' to fetch current employee roster",
             parent=self.root,
@@ -446,7 +437,6 @@ class Administrator:
 
         folder_dir = os.path.dirname(file_path)
         try:
-            # FIX: Cleared out old pickle read loops
             names_df = pd.read_csv(file_path, encoding="utf-8")
             names = names_df['EmployeeName'].tolist() if 'EmployeeName' in names_df.columns else names_df.iloc[
                 :, 0].tolist()
@@ -475,7 +465,6 @@ class Administrator:
                 selected_name = listbox.get(selection[0])
                 select_win.destroy()
 
-                # FIX: Direct targets tracking down CSV schedules
                 csv_file = os.path.join(folder_dir, f"{selected_name}.csv")
                 if os.path.exists(csv_file):
                     self.is_updating_single = True

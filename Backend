@@ -1,60 +1,303 @@
 import json
 import time
+import random
 import jwt
 import stripe
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+import smtplib
+from email.mime.text import MIMEText
+import pandas as pd
+from pathlib import Path
+from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 
 
 class Backend:
-    """Secure Backend Service hosting Stripe payment checkout and Dictionary management portals."""
+    """Secure Backend Service hosting Auth, Stripe Payments, and CSV-backed User Database."""
 
     def __init__(self):
         # 1. Initialize Security & Crypto Variables
         self.JWT_SECRET = "super_secret_system_signing_key_12345"
         self.JWT_ALGORITHM = "HS256"
 
-        # 2. Initialize Stripe Configurations
+        # 2. Initialize SMTP Email Configurations
+        self.SMTP_SERVER = "smtp.gmail.com"
+        self.SMTP_PORT = 587
+        self.SENDER_EMAIL = "your_email@gmail.com"
+        self.SENDER_PASSWORD = "your_app_password"  # Generated App Password
+
+        # 3. Initialize Stripe Configurations
         stripe.api_key = "sk_test_..."
         self.ENDPOINT_SECRET = "whsec_..."
-        self.account = {"Name":"AdminForce","Password":"asdfgfewer"}
 
-        # 3. Initialize FastAPI App instance
+        # 4. Initialize Database (CSV)
+        self.DB_FILE = Path("Names.csv")
+        self.users_df = self._load_or_create_db()
+        self.auth_codes = {}  # Temporary memory store for forgot-password OTPs: {email: code}
+
+        # 5. Initialize FastAPI App instance
         self.app = FastAPI(title="Secure Dictionary Auth API")
 
-        # 4. Initialize In-Memory Data Storage
+        # 6. Initialize In-Memory Data Storage
         self.PENDING_TOKENS = {}
         self.DICTIONARY_DATA = {
             "apple": "A round red fruit",
             "btc": "Digital gold"
         }
 
-        # 5. Bind class methods to the FastAPI router
+        # 7. Bind class methods to the FastAPI router
         self._setup_routes()
 
+    # ==========================================
+    # Database Helper Methods
+    # ==========================================
+    def _load_or_create_db(self) -> pd.DataFrame:
+        """Loads the 'Names.csv' database into memory or initializes it if absent."""
+        if self.DB_FILE.exists():
+            return pd.read_csv(self.DB_FILE)
+        else:
+            df = pd.DataFrame(columns=["user_id", "username", "password", "email"])
+            df.to_csv(self.DB_FILE, index=False)
+            return df
+
+    def _save_db(self):
+        """Persists the in-memory pandas DataFrame to the 'Names.csv' file."""
+        self.users_df.to_csv(self.DB_FILE, index=False)
+
+    # ==========================================
+    # Email Helper Method
+    # ==========================================
+    def send_email_otp(self, to_email: str, code: str):
+        """Dispatches an email with the authorization code via SMTP."""
+        msg = MIMEText(f"Your password reset verification code is: {code}")
+        msg["Subject"] = "Password Reset Auth Code"
+        msg["From"] = self.SENDER_EMAIL
+        msg["To"] = to_email
+
+        with smtplib.SMTP(self.SMTP_SERVER, self.SMTP_PORT) as server:
+            server.starttls()
+            server.login(self.SENDER_EMAIL, self.SENDER_PASSWORD)
+            server.sendmail(self.SENDER_EMAIL, to_email, msg.as_string())
+
+    # ==========================================
+    # Route Setup & HTML Pages
+    # ==========================================
     def _setup_routes(self):
-        """Registers all endpoints for payments and dict_updater on the server app."""
-        # Payment & Token Endpoints
+        """Registers all endpoints for Web 1 through Web 4 workflow."""
+        self.app.add_api_route("/", self.web1_landing, methods=["GET"], response_class=HTMLResponse)
+        self.app.add_api_route("/login", self.web2_login_page, methods=["GET"], response_class=HTMLResponse)
+        self.app.add_api_route("/login/submit", self.web2_login_handler, methods=["POST"])
+        self.app.add_api_route("/signup", self.web3_signup_page, methods=["GET"], response_class=HTMLResponse)
+        self.app.add_api_route("/signup/submit", self.web3_signup_handler, methods=["POST"])
+        self.app.add_api_route("/forgot-password", self.forgot_password_page, methods=["GET"],
+                               response_class=HTMLResponse)
+        self.app.add_api_route("/forgot-password/send-code", self.forgot_password_send_code, methods=["POST"])
+        self.app.add_api_route("/verify-code", self.verify_code_page, methods=["GET"], response_class=HTMLResponse)
+        self.app.add_api_route("/verify-code/submit", self.verify_code_handler, methods=["POST"])
+        self.app.add_api_route("/reset-password", self.reset_password_page, methods=["GET"],
+                               response_class=HTMLResponse)
+        self.app.add_api_route("/reset-password/submit", self.reset_password_handler, methods=["POST"])
+        self.app.add_api_route("/web4", self.web4_dashboard, methods=["GET"], response_class=HTMLResponse)
         self.app.add_api_route("/buy/{user_id}", self.create_checkout, methods=["GET"])
         self.app.add_api_route("/stripe-webhook", self.stripe_webhook, methods=["POST"])
         self.app.add_api_route("/payment-success", self.payment_success, methods=["GET"], response_class=HTMLResponse)
         self.app.add_api_route("/claim-token/{user_id}", self.claim_token, methods=["GET"])
         self.app.add_api_route("/get-dictionary", self.get_dictionary, methods=["GET"])
 
-        # Dict Updater Web Endpoints
-        self.app.add_api_route("/dict-updater", self.dict_updater_page, methods=["GET"], response_class=HTMLResponse)
-        self.app.add_api_route("/dict-updater/submit", self.update_dictionary_handler, methods=["POST"])
-
-    def generate_access_token(self, user_id: str) -> str:
-        """Generates a cryptographically signed JWT that expires in 15 minutes.
-        
-        Args:
-            user_id (str): The unique identifier for the user claiming access.
-
-        Returns:
-            str: Encoded JWT signed with the internal system secret.
+    # --- WEB 1: Landing Page ---
+    def web1_landing(self):
+        return """
+        <html>
+            <head><style>body{font-family:sans-serif; text-align:center; margin-top:80px;}</style></head>
+            <body>
+                <h1>Welcome to Cloud Portal</h1>
+                <div style="margin-bottom: 20px;">
+                    <a href="/signup"><button>Sign Up</button></a>
+                    <a href="/login"><button>Log In</button></a>
+                </div>
+                <hr style="width: 50%;">
+                <br>
+                <a href="/login"><button style="padding:10px 20px;">Download</button></a>
+            </body>
+        </html>
         """
+
+    # --- WEB 2: Login Page ---
+    def web2_login_page(self, error: str = ""):
+        err_msg = f'<p style="color:red">{error}</p>' if error else ''
+        return f"""
+        <html>
+            <head><style>body{{font-family:sans-serif; text-align:center; margin-top:80px;}}</style></head>
+            <body>
+                <h2>Log In</h2>
+                {err_msg}
+                <form action="/login/submit" method="post">
+                    <input type="text" name="username" placeholder="Username" required><br><br>
+                    <input type="password" name="password" placeholder="Password" required><br><br>
+                    <input type="submit" value="Enter">
+                </form>
+                <br>
+                <p>Don't have an account? <a href="/signup">Sign up</a></p>
+                <p><a href="/forgot-password">Forgot Password?</a></p>
+            </body>
+        </html>
+        """
+
+    def web2_login_handler(self, username: str = Form(...), password: str = Form(...)):
+        user = self.users_df[(self.users_df['username'] == username) & (self.users_df['password'] == password)]
+        if not user.empty:
+            user_id = user.iloc[0]['user_id']
+            return RedirectResponse(url=f"/web4?user_id={user_id}", status_code=303)
+        return HTMLResponse(content=self.web2_login_page(error="Invalid Username or Password"), status_code=400)
+
+    # --- WEB 3: Sign Up Page ---
+    def web3_signup_page(self, error: str = ""):
+        err_msg = f'<p style="color:red">{error}</p>' if error else ''
+        return f"""
+        <html>
+            <head><style>body{{font-family:sans-serif; margin:50px auto; width:300px;}}</style></head>
+            <body>
+                <h2>Sign Up Page</h2>
+                {err_msg}
+                <form action="/signup/submit" method="post">
+                    <label>Username:</label><br>
+                    <input type="text" name="username" required><br><br>
+                    <label>Password:</label><br>
+                    <input type="password" name="password" required><br><br>
+                    <label>Confirm Password:</label><br>
+                    <input type="password" name="confirm_password" required><br><br>
+                    <label>Email:</label><br>
+                    <input type="email" name="email" required><br><br>
+
+                    <p><b>Payment Information:</b></p>
+                    <label>Card Number:</label><br>
+                    <input type="text" name="card_number" required><br><br>
+                    <label>Expiration Date:</label><br>
+                    <input type="text" name="exp_date" placeholder="MM/YY" required><br><br>
+                    <label>CSV:</label><br>
+                    <input type="text" name="csv" style="width:60px;" required><br><br>
+
+                    <input type="submit" value="Complete Registration">
+                </form>
+            </body>
+        </html>
+        """
+
+    def web3_signup_handler(self, username: str = Form(...), password: str = Form(...),
+                            confirm_password: str = Form(...), email: str = Form(...)):
+        if password != confirm_password:
+            return HTMLResponse(content=self.web3_signup_page(error="Passwords do not match!"), status_code=400)
+
+        if not self.users_df[self.users_df['username'] == username].empty:
+            return HTMLResponse(content=self.web3_signup_page(error="Username already exists!"), status_code=400)
+
+        user_id = f"usr_{int(time.time())}"
+        new_user = pd.DataFrame([{"user_id": user_id, "username": username, "password": password, "email": email}])
+        self.users_df = pd.concat([self.users_df, new_user], ignore_index=True)
+        self._save_db()
+
+        return RedirectResponse(url=f"/buy/{user_id}", status_code=303)
+
+    # --- WEB 4: Dashboard Page ---
+    def web4_dashboard(self, user_id: str = ""):
+        return f"""
+        <html>
+            <head><style>body{{font-family:sans-serif; text-align:center; margin-top:80px;}}</style></head>
+            <body>
+                <h2>Dashboard (Web 4)</h2>
+                <p>User ID: {user_id}</p>
+                <form action="/buy/{user_id}" method="get">
+                    <button type="submit" style="padding:10px 20px;">Get Stocks</button>
+                </form>
+            </body>
+        </html>
+        """
+
+    # --- Forgot Password Workflow ---
+    def forgot_password_page(self):
+        return """
+        <html>
+            <head><style>body{font-family:sans-serif; text-align:center; margin-top:80px;}</style></head>
+            <body>
+                <h2>Forgot Password</h2>
+                <form action="/forgot-password/send-code" method="post">
+                    <input type="email" name="email" placeholder="Enter your email" required><br><br>
+                    <input type="submit" value="Send Auth Code">
+                </form>
+            </body>
+        </html>
+        """
+
+    def forgot_password_send_code(self, email: str = Form(...)):
+        if self.users_df[self.users_df['email'] == email].empty:
+            raise HTTPException(status_code=404, detail="Email not registered.")
+
+        # Generate a 6-digit Auth Code
+        code = str(random.randint(100000, 999999))
+        self.auth_codes[email] = code
+
+        # Send actual email in place of print statement
+        try:
+            self.send_email_otp(email, code)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+
+        return RedirectResponse(url=f"/verify-code?email={email}", status_code=303)
+
+    def verify_code_page(self, email: str):
+        return f"""
+        <html>
+            <head><style>body{{font-family:sans-serif; text-align:center; margin-top:80px;}}</style></head>
+            <body>
+                <h2>Enter Auth Code</h2>
+                <p>Code sent to: {email}</p>
+                <form action="/verify-code/submit" method="post">
+                    <input type="hidden" name="email" value="{email}">
+                    <input type="text" name="code" placeholder="6-digit code" required><br><br>
+                    <input type="submit" value="Validate Code">
+                </form>
+            </body>
+        </html>
+        """
+
+    def verify_code_handler(self, email: str = Form(...), code: str = Form(...)):
+        if self.auth_codes.get(email) == code:
+            return RedirectResponse(url=f"/reset-password?email={email}", status_code=303)
+        raise HTTPException(status_code=400, detail="Invalid Auth Code.")
+
+    def reset_password_page(self, email: str):
+        return f"""
+        <html>
+            <head><style>body{{font-family:sans-serif; text-align:center; margin-top:80px;}}</style></head>
+            <body>
+                <h2>Change Password</h2>
+                <form action="/reset-password/submit" method="post">
+                    <input type="hidden" name="email" value="{email}">
+                    <input type="password" name="new_password" placeholder="New Password" required><br><br>
+                    <input type="submit" value="Update Password">
+                </form>
+            </body>
+        </html>
+        """
+
+    def reset_password_handler(self, email: str = Form(...), new_password: str = Form(...)):
+        self.users_df.loc[self.users_df['email'] == email, 'password'] = new_password
+        self._save_db()
+        self.auth_codes.pop(email, None)
+
+        return """
+        <html>
+            <body style="font-family:sans-serif; text-align:center; margin-top:80px;">
+                <h2 style="color:green;">Password Successfully Updated!</h2>
+                <a href="/login">Click here to Log In</a>
+            </body>
+        </html>
+        """
+
+    # ==========================================
+    # Payment & Auth Helper API Functions
+    # ==========================================
+    def generate_access_token(self, user_id: str) -> str:
         payload = {
             "sub": user_id,
             "exp": time.time() + 900,
@@ -63,21 +306,20 @@ class Backend:
         return jwt.encode(payload, self.JWT_SECRET, algorithm=self.JWT_ALGORITHM)
 
     def create_checkout(self, user_id: str):
-        """Generates a Stripe Checkout page link and redirects the user."""
         try:
             session = stripe.checkout.Session.create(
                 payment_method_types=['card'],
                 line_items=[{
                     'price_data': {
                         'currency': 'usd',
-                        'product_data': {'name': 'Premium Dictionary'},
+                        'product_data': {'name': 'Premium Dictionary Access'},
                         'unit_amount': 999
                     },
                     'quantity': 1
                 }],
                 mode='payment',
                 success_url=f"http://127.0.0.1:8000/payment-success?user_id={user_id}",
-                cancel_url="http://127.0.0.1:8000/cancel",
+                cancel_url="http://127.0.0.1:8000/",
                 client_reference_id=user_id
             )
             return RedirectResponse(url=session.url)
@@ -85,7 +327,6 @@ class Backend:
             raise HTTPException(status_code=400, detail=str(e))
 
     async def stripe_webhook(self, request: Request):
-        """Listens for Stripe's automated server notification that the user paid."""
         payload = await request.body()
         sig_header = request.headers.get("stripe-signature")
 
@@ -98,33 +339,29 @@ class Backend:
             session = event['data']['object']
             user_id = session['client_reference_id']
 
-            # Cryptographically generate a token using instance variables
             secure_jwt = self.generate_access_token(user_id)
             self.PENDING_TOKENS[user_id] = secure_jwt
 
         return {"status": "success"}
 
     def payment_success(self, user_id: str):
-        """Graceful landing tab displayed to the customer once Stripe transaction finishes."""
         return """
         <html>
             <head><style>body{font-family:sans-serif; text-align:center; margin-top:50px;}</style></head>
             <body>
                 <h2 style="color: green;">✓ Payment Successful!</h2>
-                <p>You can safely close this web browser window and return directly to your Desktop Application.</p>
+                <p>You can safely close this web browser window and return to the Application.</p>
             </body>
         </html>
         """
 
     def claim_token(self, user_id: str):
-        """Desktop app calls this to safely pull down their new signed JWT."""
         token = self.PENDING_TOKENS.pop(user_id, None)
         if not token:
             raise HTTPException(status_code=400, detail="No token available or already claimed.")
         return {"access_token": token}
 
     def get_dictionary(self, request: Request):
-        """Secure endpoint: Manually verifies the JWT signature passed in the Authorization header."""
         auth_header = request.headers.get("Authorization")
 
         if not auth_header or not auth_header.startswith("Bearer "):
@@ -141,63 +378,12 @@ class Backend:
         except jwt.InvalidTokenError:
             raise HTTPException(status_code=401, detail="Invalid token signature.")
 
-    def dict_updater_page(self):
-        """Renders the HTML upload form for dictionary updates."""
-        return """
-        <html>
-            <head><style>body{font-family:sans-serif; margin: 40px;}</style></head>
-            <body>
-                <h2>Dictionary Updater Portal</h2>
-                <form action="/dict-updater/submit" method="post">
-                    <label>Username:</label><br>
-                    <input type="text" name="username" required><br><br>
-                    <label>Password:</label><br>
-                    <input type="password" name="password" required><br><br>
-                    <label>Dictionary JSON Payload (e.g. {"key": "value"}):</label><br>
-                    <textarea name="dict_payload" rows="6" cols="50" required></textarea><br><br>
-                    <input type="submit" value="Update Dictionary">
-                </form>
-            </body>
-        </html>
-        """
-
-    async def update_dictionary_handler(self, request: Request):
-        """Processes submitted dictionary payload and updates in-memory storage."""
-        form_data = await request.form()
-        username = form_data.get("username")
-        password = form_data.get("password")
-        dict_payload = form_data.get("dict_payload")
-
-        # Parse submitted JSON dictionary string
-        try:
-            parsed_dict = json.loads(dict_payload)
-            if not isinstance(parsed_dict, dict):
-                raise ValueError
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid JSON dictionary format.")
-	if self.account["Name"] == username and self.account["Password"] == password:
-            # Update in-memory dictionary data
-            self.DICTIONARY_DATA.update(parsed_dict)
-
-            return {
-                "status": "success",
-                "message": f"Dictionary updated successfully by {username}.",
-                "updated_data": self.DICTIONARY_DATA
-            }
-        return {
-           "status": "Failure",
-           "message": f"Dictionary updated failed to upload by {username}."}
-
-
     def run_server(self):
-        """Boots up the unified Uvicorn server hosting all routes."""
         print("Starting Unified Secure Backend on http://127.0.0.1:8000")
         uvicorn.run(self.app, host="127.0.0.1", port=8000)
 
 
-# ==========================================
-# Server Runtime Execution Entry Point
-# ==========================================
 if __name__ == "__main__":
     backend_service = Backend()
     backend_service.run_server()
+    

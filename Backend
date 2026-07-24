@@ -33,6 +33,8 @@ class Backend:
         # 4. Initialize Database & File Paths
         self.DB_FILE = Path("Names.csv")
         self.WAITLIST_FILE = Path("Waitlist.csv")
+        self.CHURN_FILE = Path("Churn_Feedback.csv")
+        self.USAGE_FILE = Path("Usage_Log.csv")
 
         self.users_df = self._load_or_create_db()
         self.auth_codes = {}  # Temporary memory store for forgot-password OTPs: {email: code}
@@ -69,16 +71,37 @@ class Backend:
     def _add_to_waitlist(self, email: str):
         """Appends an email to 'Waitlist.csv' on disk without holding it in memory."""
         new_row = pd.DataFrame([{"email": email, "timestamp": time.time()}])
-
         if self.WAITLIST_FILE.exists():
-            # Append without reading the entire dataset into memory
             new_row.to_csv(self.WAITLIST_FILE, mode="a", header=False, index=False)
         else:
-            # Create file with headers if missing
             new_row.to_csv(self.WAITLIST_FILE, mode="w", header=["email", "timestamp"], index=False)
 
+    def _log_churn_feedback(self, user_id: str, reason: str, comments: str):
+        """Phase 5: Appends account cancellation survey responses to disk."""
+        entry = pd.DataFrame([{
+            "timestamp": time.time(),
+            "user_id": user_id,
+            "reason": reason,
+            "comments": comments
+        }])
+        if self.CHURN_FILE.exists():
+            entry.to_csv(self.CHURN_FILE, mode="a", header=False, index=False)
+        else:
+            entry.to_csv(self.CHURN_FILE, mode="w", header=["timestamp", "user_id", "reason", "comments"], index=False)
+
+    def _log_api_usage(self, user_id: str):
+        """Phase 5: Logs telemetry for API activity to track user engagement."""
+        entry = pd.DataFrame([{
+            "timestamp": time.time(),
+            "user_id": user_id
+        }])
+        if self.USAGE_FILE.exists():
+            entry.to_csv(self.USAGE_FILE, mode="a", header=False, index=False)
+        else:
+            entry.to_csv(self.USAGE_FILE, mode="w", header=["timestamp", "user_id"], index=False)
+
     # ==========================================
-    # Email Helper Method
+    # Email Helper Methods
     # ==========================================
     def send_email_otp(self, to_email: str, code: str):
         """Dispatches an email with the authorization code via SMTP."""
@@ -91,6 +114,22 @@ class Backend:
             server.starttls()
             server.login(self.SENDER_EMAIL, self.SENDER_PASSWORD)
             server.sendmail(self.SENDER_EMAIL, to_email, msg.as_string())
+
+    def send_reengagement_email(self, to_email: str):
+        """Phase 5: Sends an automated check-in email to inactive users."""
+        body = "We noticed you haven't used your Dictionary API key in over 2 weeks. Need help integrating it into your app? Reply to this email anytime!"
+        msg = MIMEText(body)
+        msg["Subject"] = "We miss you at Cloud Portal!"
+        msg["From"] = self.SENDER_EMAIL
+        msg["To"] = to_email
+
+        try:
+            with smtplib.SMTP(self.SMTP_SERVER, self.SMTP_PORT) as server:
+                server.starttls()
+                server.login(self.SENDER_EMAIL, self.SENDER_PASSWORD)
+                server.sendmail(self.SENDER_EMAIL, to_email, msg.as_string())
+        except Exception as e:
+            print(f"Failed to send re-engagement email to {to_email}: {e}")
 
     # ==========================================
     # Route Setup & HTML Pages
@@ -114,13 +153,20 @@ class Backend:
         self.app.add_api_route("/web4", self.web4_dashboard, methods=["GET"], response_class=HTMLResponse)
         self.app.add_api_route("/update-card", self.update_card_page, methods=["GET"], response_class=HTMLResponse)
         self.app.add_api_route("/update-card/submit", self.update_card_handler, methods=["POST"])
+        
+        # Phase 5: Enhanced Delete Account Workflow with Exit Survey
         self.app.add_api_route("/delete-user", self.delete_user_page, methods=["GET"], response_class=HTMLResponse)
-        self.app.add_api_route("/delete-user/submit", self.delete_user_handler, methods=["POST"])
+        self.app.add_api_route("/delete-user/submit", self.delete_user_handler, methods=["POST"], response_class=HTMLResponse)
+        self.app.add_api_route("/delete-user/confirm", self.delete_user_confirm, methods=["POST"], response_class=HTMLResponse)
+
         self.app.add_api_route("/buy/{user_id}", self.create_checkout, methods=["GET"])
         self.app.add_api_route("/stripe-webhook", self.stripe_webhook, methods=["POST"])
         self.app.add_api_route("/payment-success", self.payment_success, methods=["GET"], response_class=HTMLResponse)
         self.app.add_api_route("/claim-token/{user_id}", self.claim_token, methods=["GET"])
         self.app.add_api_route("/get-dictionary", self.get_dictionary, methods=["GET"])
+        
+        # Phase 5: Re-engagement Trigger Endpoint
+        self.app.add_api_route("/admin/trigger-reengagement", self.trigger_reengagement, methods=["POST"])
 
     # --- WEB 1: Landing Page ---
     def web1_landing(self):
@@ -170,8 +216,7 @@ class Backend:
 
     # --- WEB 3: Sign Up Page (With Waitlist Guard) ---
     def web3_signup_page(self, error: str = ""):
-        # Check if the account limit of 1500 has been reached
-        if len(self.users_df) >= 1:
+        if len(self.users_df) >= 1500:
             return """
             <html>
                 <head><style>body{font-family:sans-serif; text-align:center; margin-top:80px;}</style></head>
@@ -223,7 +268,6 @@ class Backend:
     def web3_signup_handler(self, username: str = Form(...), password: str = Form(...),
                             confirm_password: str = Form(...), email: str = Form(...),
                             card_number: str = Form(""), exp_date: str = Form(""), csv: str = Form("")):
-        # Double check account cap in case of concurrent requests
         if len(self.users_df) >= 1500:
             return HTMLResponse(content=self.web3_signup_page(), status_code=200)
 
@@ -332,7 +376,7 @@ class Backend:
         else:
             raise HTTPException(status_code=404, detail="User not found.")
 
-    # --- Delete User Workflow ---
+    # --- Phase 5: Delete User & Churn Survey Workflow ---
     def delete_user_page(self, user_id: str):
         return f"""
         <html>
@@ -342,7 +386,7 @@ class Backend:
                 <p>Are you sure you want to permanently delete user <b>{user_id}</b> and all associated data?</p>
                 <form action="/delete-user/submit" method="post">
                     <input type="hidden" name="user_id" value="{user_id}">
-                    <button type="submit" style="padding:10px 20px; background-color:#ff4d4d; color:white; border:none; border-radius:4px; cursor:pointer;">Yes, Delete My Account</button>
+                    <button type="submit" style="padding:10px 20px; background-color:#ff4d4d; color:white; border:none; border-radius:4px; cursor:pointer;">Yes, Continue to Deletion</button>
                 </form>
                 <br>
                 <a href="/web4?user_id={user_id}"><button style="padding:8px 16px;">Cancel</button></a>
@@ -351,6 +395,40 @@ class Backend:
         """
 
     def delete_user_handler(self, user_id: str = Form(...)):
+        """Phase 5: Intercepts account deletion with a brief churn survey."""
+        return f"""
+        <html>
+            <head><style>body{{font-family:sans-serif; margin:50px auto; width:350px; text-align:center;}}</style></head>
+            <body>
+                <h2>We're Sorry to See You Go</h2>
+                <p>Please take a moment to tell us why you are leaving so we can improve:</p>
+                <form action="/delete-user/confirm" method="post" style="text-align:left;">
+                    <input type="hidden" name="user_id" value="{user_id}">
+                    
+                    <label for="reason">Primary Reason:</label><br>
+                    <select name="reason" id="reason" style="width:100%; padding:6px; margin-top:5px;" required>
+                        <option value="too_expensive">Too expensive</option>
+                        <option value="missing_features">Missing required features</option>
+                        <option value="hard_to_use">Too complicated to use</option>
+                        <option value="no_longer_needed">No longer need the service</option>
+                        <option value="other">Other</option>
+                    </select><br><br>
+
+                    <label for="comments">Additional Feedback (Optional):</label><br>
+                    <textarea name="comments" rows="4" style="width:100%;"></textarea><br><br>
+
+                    <button type="submit" style="width:100%; padding:10px; background-color:#ff4d4d; color:white; border:none; border-radius:4px; cursor:pointer;">Confirm Permanent Deletion</button>
+                </form>
+            </body>
+        </html>
+        """
+
+    def delete_user_confirm(self, user_id: str = Form(...), reason: str = Form(...), comments: str = Form("")):
+        """Phase 5: Logs survey feedback to disk and removes user account data."""
+        # 1. Log churn metrics
+        self._log_churn_feedback(user_id=user_id, reason=reason, comments=comments)
+
+        # 2. Delete user account
         initial_count = len(self.users_df)
         self.users_df = self.users_df[self.users_df['user_id'] != user_id]
 
@@ -363,7 +441,7 @@ class Backend:
                 <head><style>body{font-family:sans-serif; text-align:center; margin-top:80px;}</style></head>
                 <body>
                     <h2>Account Deleted</h2>
-                    <p>All user data associated with your account has been permanently removed from Names.csv.</p>
+                    <p>Your feedback has been logged, and your user data has been permanently removed.</p>
                     <a href="/"><button style="padding:10px 20px;">Return to Home</button></a>
                 </body>
             </html>
@@ -526,13 +604,43 @@ class Backend:
         token = auth_header.split(" ")[1]
 
         try:
-            jwt.decode(token, self.JWT_SECRET, algorithms=[self.JWT_ALGORITHM])
+            decoded_token = jwt.decode(token, self.JWT_SECRET, algorithms=[self.JWT_ALGORITHM])
+            user_id = decoded_token.get("sub")
+            
+            # Phase 5: Log telemetry for active user retention tracking
+            if user_id:
+                self._log_api_usage(user_id)
+
             return self.DICTIONARY_DATA
 
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=401, detail="Token has expired.")
         except jwt.InvalidTokenError:
             raise HTTPException(status_code=401, detail="Invalid token signature.")
+
+    # --- Phase 5: Automated Inactivity & Re-engagement System ---
+    def trigger_reengagement(self):
+        """Phase 5: Scans usage logs and emails users who have been inactive for 14+ days."""
+        if not self.USAGE_FILE.exists():
+            return {"status": "No usage data found."}
+
+        usage_df = pd.read_csv(self.USAGE_FILE)
+        fourteen_days_ago = time.time() - (14 * 86400)
+
+        # Find the most recent usage per user
+        recent_usage = usage_df.groupby('user_id')['timestamp'].max().reset_index()
+        inactive_users = recent_usage[recent_usage['timestamp'] < fourteen_days_ago]
+
+        emails_sent = 0
+        for _, row in inactive_users.iterrows():
+            u_id = row['user_id']
+            user_match = self.users_df[self.users_df['user_id'] == u_id]
+            if not user_match.empty:
+                email = user_match.iloc[0]['email']
+                self.send_reengagement_email(email)
+                emails_sent += 1
+
+        return {"status": "success", "reengagement_emails_sent": emails_sent}
 
     def run_server(self):
         print("Starting Unified Secure Backend on http://127.0.0.1:8000")
@@ -542,4 +650,3 @@ class Backend:
 if __name__ == "__main__":
     backend_service = Backend()
     backend_service.run_server()
-    

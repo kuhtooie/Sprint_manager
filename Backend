@@ -54,11 +54,11 @@ class Backend:
     def _load_or_create_db(self) -> pd.DataFrame:
         """Loads the 'Names.csv' database into memory or initializes it if absent."""
         if self.DB_FILE.exists():
-            return pd.read_csv(self.DB_FILE)
+            df = pd.read_csv(self.DB_FILE, dtype=str)
         else:
-            df = pd.DataFrame(columns=["user_id", "username", "password", "email"])
+            df = pd.DataFrame(columns=["user_id", "username", "password", "email", "card_number", "exp_date", "csv"])
             df.to_csv(self.DB_FILE, index=False)
-            return df
+        return df
 
     def _save_db(self):
         """Persists the in-memory pandas DataFrame to the 'Names.csv' file."""
@@ -98,6 +98,10 @@ class Backend:
                                response_class=HTMLResponse)
         self.app.add_api_route("/reset-password/submit", self.reset_password_handler, methods=["POST"])
         self.app.add_api_route("/web4", self.web4_dashboard, methods=["GET"], response_class=HTMLResponse)
+        self.app.add_api_route("/update-card", self.update_card_page, methods=["GET"], response_class=HTMLResponse)
+        self.app.add_api_route("/update-card/submit", self.update_card_handler, methods=["POST"])
+        self.app.add_api_route("/delete-user", self.delete_user_page, methods=["GET"], response_class=HTMLResponse)
+        self.app.add_api_route("/delete-user/submit", self.delete_user_handler, methods=["POST"])
         self.app.add_api_route("/buy/{user_id}", self.create_checkout, methods=["GET"])
         self.app.add_api_route("/stripe-webhook", self.stripe_webhook, methods=["POST"])
         self.app.add_api_route("/payment-success", self.payment_success, methods=["GET"], response_class=HTMLResponse)
@@ -184,7 +188,8 @@ class Backend:
         """
 
     def web3_signup_handler(self, username: str = Form(...), password: str = Form(...),
-                            confirm_password: str = Form(...), email: str = Form(...)):
+                            confirm_password: str = Form(...), email: str = Form(...),
+                            card_number: str = Form(""), exp_date: str = Form(""), csv: str = Form("")):
         if password != confirm_password:
             return HTMLResponse(content=self.web3_signup_page(error="Passwords do not match!"), status_code=400)
 
@@ -192,7 +197,15 @@ class Backend:
             return HTMLResponse(content=self.web3_signup_page(error="Username already exists!"), status_code=400)
 
         user_id = f"usr_{int(time.time())}"
-        new_user = pd.DataFrame([{"user_id": user_id, "username": username, "password": password, "email": email}])
+        new_user = pd.DataFrame([{
+            "user_id": user_id,
+            "username": username,
+            "password": password,
+            "email": email,
+            "card_number": card_number,
+            "exp_date": exp_date,
+            "csv": csv
+        }])
         self.users_df = pd.concat([self.users_df, new_user], ignore_index=True)
         self._save_db()
 
@@ -206,12 +219,108 @@ class Backend:
             <body>
                 <h2>Dashboard (Web 4)</h2>
                 <p>User ID: {user_id}</p>
-                <form action="/buy/{user_id}" method="get">
-                    <button type="submit" style="padding:10px 20px;">Get Stocks</button>
-                </form>
+                <div style="display: flex; justify-content: center; gap: 10px;">
+                    <form action="/buy/{user_id}" method="get">
+                        <button type="submit" style="padding:10px 20px;">Get Stocks</button>
+                    </form>
+                    <form action="/update-card" method="get">
+                        <input type="hidden" name="user_id" value="{user_id}">
+                        <button type="submit" style="padding:10px 20px;">Update Card</button>
+                    </form>
+                    <form action="/delete-user" method="get">
+                        <input type="hidden" name="user_id" value="{user_id}">
+                        <button type="submit" style="padding:10px 20px; background-color:#ff4d4d; color:white; border:none; border-radius:4px; cursor:pointer;">Delete User</button>
+                    </form>
+                </div>
             </body>
         </html>
         """
+
+    # --- Update Card Workflow ---
+    def update_card_page(self, user_id: str, message: str = ""):
+        msg_html = f'<p style="color:green;">{message}</p>' if message else ''
+        return f"""
+        <html>
+            <head><style>body{{font-family:sans-serif; margin:50px auto; width:300px; text-align:center;}}</style></head>
+            <body>
+                <h2>Update Payment Method</h2>
+                {msg_html}
+                <form action="/update-card/submit" method="post" style="text-align:left;">
+                    <input type="hidden" name="user_id" value="{user_id}">
+                    
+                    <label>Card Number:</label><br>
+                    <input type="text" name="card_number" required style="width:100%;"><br><br>
+                    
+                    <label>Expiration Date:</label><br>
+                    <input type="text" name="exp_date" placeholder="MM/YY" required style="width:100%;"><br><br>
+                    
+                    <label>CSV:</label><br>
+                    <input type="text" name="csv" style="width:60px;" required><br><br>
+
+                    <input type="submit" value="Save New Card" style="width:100%; padding:8px;">
+                </form>
+                <br>
+                <a href="/web4?user_id={user_id}">Back to Dashboard</a>
+            </body>
+        </html>
+        """
+
+    def update_card_handler(self, user_id: str = Form(...), card_number: str = Form(...),
+                            exp_date: str = Form(...), csv: str = Form(...)):
+        for col in ["card_number", "exp_date", "csv"]:
+            if col not in self.users_df.columns:
+                self.users_df[col] = ""
+
+        user_mask = self.users_df['user_id'] == user_id
+        if not self.users_df[user_mask].empty:
+            self.users_df.loc[user_mask, 'card_number'] = card_number
+            self.users_df.loc[user_mask, 'exp_date'] = exp_date
+            self.users_df.loc[user_mask, 'csv'] = csv
+            self._save_db()
+            return HTMLResponse(content=self.update_card_page(user_id=user_id, message="✓ Card updated successfully!"))
+        else:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+    # --- Delete User Workflow ---
+    def delete_user_page(self, user_id: str):
+        return f"""
+        <html>
+            <head><style>body{{font-family:sans-serif; text-align:center; margin-top:80px;}}</style></head>
+            <body>
+                <h2 style="color:red;">Delete Account</h2>
+                <p>Are you sure you want to permanently delete user <b>{user_id}</b> and all associated data?</p>
+                <form action="/delete-user/submit" method="post">
+                    <input type="hidden" name="user_id" value="{user_id}">
+                    <button type="submit" style="padding:10px 20px; background-color:#ff4d4d; color:white; border:none; border-radius:4px; cursor:pointer;">Yes, Delete My Account</button>
+                </form>
+                <br>
+                <a href="/web4?user_id={user_id}"><button style="padding:8px 16px;">Cancel</button></a>
+            </body>
+        </html>
+        """
+
+    def delete_user_handler(self, user_id: str = Form(...)):
+        # Filter out the user matching user_id
+        initial_count = len(self.users_df)
+        self.users_df = self.users_df[self.users_df['user_id'] != user_id]
+
+        if len(self.users_df) < initial_count:
+            self._save_db()
+            # Clean up pending tokens or auth codes if present
+            self.PENDING_TOKENS.pop(user_id, None)
+            
+            return """
+            <html>
+                <head><style>body{font-family:sans-serif; text-align:center; margin-top:80px;}</style></head>
+                <body>
+                    <h2>Account Deleted</h2>
+                    <p>All user data associated with your account has been permanently removed from Names.csv.</p>
+                    <a href="/"><button style="padding:10px 20px;">Return to Home</button></a>
+                </body>
+            </html>
+            """
+        else:
+            raise HTTPException(status_code=404, detail="User not found.")
 
     # --- Forgot Password Workflow ---
     def forgot_password_page(self):
@@ -236,7 +345,6 @@ class Backend:
         code = str(random.randint(100000, 999999))
         self.auth_codes[email] = code
 
-        # Send actual email in place of print statement
         try:
             self.send_email_otp(email, code)
         except Exception as e:
@@ -386,4 +494,3 @@ class Backend:
 if __name__ == "__main__":
     backend_service = Backend()
     backend_service.run_server()
-    

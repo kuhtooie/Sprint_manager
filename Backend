@@ -1,4 +1,4 @@
-"""Secure Backend Service with Subscription Enrollment, Automated Stripe Billing, and Access Guard."""
+"""Secure Backend Service with Subscription Enrollment, Automated Stripe Billing, Access Guard, and Single-Trial Enforcement."""
 
 import json
 import time
@@ -10,12 +10,13 @@ import smtplib
 from email.mime.text import MIMEText
 import pandas as pd
 from pathlib import Path
+from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 
 
 class Backend:
-    """Secure Backend Service hosting Auth, Stripe Payments, and CSV-backed User Database."""
+    """Secure Backend Service hosting Auth, Stripe Payments, CSV-backed User Database, and Trial History Tracking."""
 
     def __init__(self):
         # 1. Initialize Security & Crypto Variables
@@ -37,6 +38,7 @@ class Backend:
         self.WAITLIST_FILE = Path("Waitlist.csv")
         self.CHURN_FILE = Path("Churn_Feedback.csv")
         self.USAGE_FILE = Path("Usage_Log.csv")
+        self.TRIAL_LOG_FILE = Path("Trial_Log.csv")  # Persistent trial history ledger
 
         self.users_df = self._load_or_create_db()
         self.auth_codes = {}
@@ -75,6 +77,21 @@ class Backend:
     def _save_db(self):
         """Persists the in-memory pandas DataFrame to the 'Names.csv' file."""
         self.users_df.to_csv(self.DB_FILE, index=False)
+
+    def _has_claimed_trial(self, email: str) -> bool:
+        """Checks if an email has ever claimed a free trial (persisted even after user deletion)."""
+        if not self.TRIAL_LOG_FILE.exists():
+            return False
+        df = pd.read_csv(self.TRIAL_LOG_FILE, dtype=str)
+        return email.lower() in df['email'].str.lower().values
+
+    def _log_trial_claim(self, email: str):
+        """Permanently records an email in the trial log to prevent duplicate trials."""
+        entry = pd.DataFrame([{"email": email.lower(), "timestamp": time.time()}])
+        if self.TRIAL_LOG_FILE.exists():
+            entry.to_csv(self.TRIAL_LOG_FILE, mode="a", header=False, index=False)
+        else:
+            entry.to_csv(self.TRIAL_LOG_FILE, mode="w", header=["email", "timestamp"], index=False)
 
     def _add_to_waitlist(self, email: str):
         """Appends an email to 'Waitlist.csv' on disk without holding it in memory."""
@@ -125,7 +142,7 @@ class Backend:
 
     def send_reengagement_email(self, to_email: str):
         """Sends an automated check-in email to inactive users."""
-        body = "We noticed you haven't used your Dictionary API key in over 2 weeks. Need help integrating it into your app? Reply to this email anytime!"
+        body = "We noticed you haven't used your Signals API in over 2 weeks. Need help integrating it into your app? Reply to this email anytime!"
         msg = MIMEText(body)
         msg["Subject"] = "We miss you at Cloud Portal!"
         msg["From"] = self.SENDER_EMAIL
@@ -354,17 +371,35 @@ class Backend:
 
     # --- Enrollment & Instant Subscription Billing Workflow ---
     def enroll_page(self, user_id: str):
+        user_mask = self.users_df['user_id'] == user_id
+        if self.users_df[user_mask].empty:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        email = self.users_df[user_mask].iloc[0]['email']
+        is_eligible_for_free_trial = not self._has_claimed_trial(email)
+
+        trial_text = """
+        <p style="color:#28a745; font-weight:bold; font-size:1.1em;">
+            🎉 You are eligible for 1 Month Free!
+        </p>
+        <p>Your card will not be charged today. Billing of $400/mo begins in 30 days.</p>
+        """ if is_eligible_for_free_trial else """
+        <p style="color:#dc3545; font-weight:bold;">
+            ⚠️ Trial previously used on this email account.
+        </p>
+        <p>You will be billed $400 immediately to activate your subscription.</p>
+        """
+
         return f"""
         <html>
             <head><style>body{{font-family:sans-serif; text-align:center; margin-top:80px;}}</style></head>
             <body>
                 <h2>Confirm Subscription Enrollment</h2>
-                <p>Do you want to start billing yourself in a recurring subscription?</p>
-                <p>Clicking below will bill your stored payment card immediately via Stripe.</p>
+                {trial_text}
                 <br>
                 <form action="/enroll/confirm" method="post">
                     <input type="hidden" name="user_id" value="{user_id}">
-                    <button type="submit" style="padding:12px 24px; background-color:#28a745; color:white; border:none; border-radius:4px; font-size:16px; cursor:pointer;">yes enroll</button>
+                    <button type="submit" style="padding:12px 24px; background-color:#28a745; color:white; border:none; border-radius:4px; font-size:16px; cursor:pointer;">Start Subscription</button>
                 </form>
                 <br>
                 <a href="/web4?user_id={user_id}">Skip for now</a>
@@ -377,22 +412,31 @@ class Backend:
         if self.users_df[user_mask].empty:
             raise HTTPException(status_code=404, detail="User not found.")
 
-        # Bill immediately via Stripe API integration
-        try:
-            user_row = self.users_df[user_mask].iloc[0]
-            # Execute instant charge via Stripe Checkout or PaymentIntent
-            _ = stripe.PaymentIntent.create(
-                amount=999,
-                currency="usd",
-                payment_method_types=["card"],
-                description=f"Subscription charge for {user_row['username']}"
-            )
-        except Exception:
-            # Fallback/Development mode handling if Stripe test keys are unconfigured
-            pass
+        user_row = self.users_df[user_mask].iloc[0]
+        user_email = user_row['email']
 
-        # Update enrollment status and timestamp bill date immediately upon confirmation
-        bill_date = time.strftime("%Y-%m-%d")
+        # Check if email has previously claimed a trial
+        has_claimed = self._has_claimed_trial(user_email)
+
+        if not has_claimed:
+            # First time user: Free 1st month (30 days deferred billing)
+            self._log_trial_claim(user_email)  # Track email permanently
+            next_bill_dt = datetime.now() + timedelta(days=30)
+            bill_date = next_bill_dt.strftime("%Y-%m-%d")
+        else:
+            # Recurring user: Bill $400 subscription fee immediately
+            bill_date = time.strftime("%Y-%m-%d")
+            try:
+                _ = stripe.PaymentIntent.create(
+                    amount=40000,  # $400.00 USD
+                    currency="usd",
+                    payment_method_types=["card"],
+                    description=f"Standard Monthly Subscription Charge for {user_row['username']}"
+                )
+            except Exception:
+                pass  # Fallback for offline/test key execution
+
+        # Update enrollment status and next bill date
         self.users_df.loc[user_mask, 'enrolled'] = "1"
         self.users_df.loc[user_mask, 'bill_date'] = bill_date
         self._save_db()
@@ -679,7 +723,7 @@ class Backend:
                     'price_data': {
                         'currency': 'usd',
                         'product_data': {'name': 'Premium Dictionary Access'},
-                        'unit_amount': 999
+                        'unit_amount': 40000
                     },
                     'quantity': 1
                 }],
@@ -728,30 +772,17 @@ class Backend:
         """
 
     def claim_token(self, user_id: str):
-        """Claims or regenerates an access token based on active subscription status in DB.
-
-        Args:
-            user_id: The unique identifier for the user.
-
-        Returns:
-            dict: JSON dictionary containing the valid JWT access_token.
-
-        Raises:
-            HTTPException: 404 if user is not found, or 403 if user is not enrolled.
-        """
-        # 1. Check if token exists in pending queue (from fresh payment)
+        """Claims or regenerates an access token based on active subscription status in DB."""
         token = self.PENDING_TOKENS.pop(user_id, None)
         if token:
             return {"access_token": token}
 
-        # 2. Fallback: Check persistent DB to allow unlimited re-issuance during active subscription
         user_mask = self.users_df["user_id"] == user_id
         if self.users_df[user_mask].empty:
             raise HTTPException(status_code=404, detail="User not found.")
 
         user_row = self.users_df[user_mask].iloc[0]
         if str(user_row.get("enrolled", "0")) == "1":
-            # Mint a fresh 15-minute JWT for the active subscriber
             new_token = self.generate_access_token(user_id)
             return {"access_token": new_token}
 

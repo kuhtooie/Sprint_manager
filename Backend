@@ -188,16 +188,44 @@ class Backend:
     def web1_landing(self):
         return """
         <html>
-            <head><style>body{font-family:sans-serif; text-align:center; margin-top:80px;}</style></head>
+            <head>
+                <style>
+                    body { font-family: sans-serif; text-align: center; margin-top: 40px; background-color: #f8f9fa; color: #333; }
+                    .container { max-width: 700px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+                    .script-box { background: #1e1e1e; color: #d4d4d4; font-family: monospace; padding: 15px; border-radius: 5px; text-align: left; margin: 20px 0; overflow-x: auto; }
+                    .btn { padding: 10px 20px; font-size: 16px; border-radius: 4px; border: none; cursor: pointer; text-decoration: none; display: inline-block; margin: 5px; }
+                    .btn-primary { background-color: #007bff; color: white; }
+                    .btn-secondary { background-color: #6c757d; color: white; }
+                </style>
+            </head>
             <body>
-                <h1>Welcome to Cloud Portal</h1>
-                <div style="margin-bottom: 20px;">
-                    <a href="/signup"><button>Sign Up</button></a>
-                    <a href="/login"><button>Log In</button></a>
+                <div class="container">
+                    <h1>Algorithmic Stock Signals</h1>
+                    
+                    <p style="font-size: 1.1em; line-height: 1.5; text-align: left;">
+                        This is a stock signal website. The algorithm produced 260% in returns from a $14,000 account in the first year; with a max draw down of 17% and an accuracy above 60%. It is subscription based, with a $400 a month subscription. It is not recommended that you use the signals to trade during the months of June to August. So, with the subscription being $4,800 a year; with a $25,000 account; it would be reasonable to expect to make $25,000 after the subscription fee is subtracted from the profits trading options. Check out the link below for an option strategy to use with the signals to get the desired result.
+                    </p>
+
+                    <p style="text-align: left;"><strong>Expected Output Format:</strong></p>
+                    <div class="script-box">
+{
+    "TSLA": 5.87,
+    "AAPL": 13.45
+}
+                    </div>
+                    <p style="font-size: 0.9em; color: #666; text-align: left;">
+                        <em>Note: The string is the stock symbol and the floating point number is the Average True Range (ATR) — the projected upside potential.</em>
+                    </p>
+
+                    <p style="font-weight: bold; color: #28a745; font-size: 1.2em; margin-top: 25px;">
+                        The first month is free! Proof of concept to get you off the ground and profitable. Let's make some money!
+                    </p>
+
+                    <div style="margin-top: 30px;">
+                        <a href="/signup" class="btn btn-primary">Sign Up Now (Free 1st Month)</a>
+                        <a href="/login" class="btn btn-secondary">Log In</a>
+                    </div>
                 </div>
-                <hr style="width: 50%;">
-                <br>
-                <a href="/login"><button style="padding:10px 20px;">Download</button></a>
             </body>
         </html>
         """
@@ -731,8 +759,7 @@ class Backend:
             status_code=403,
             detail="Active subscription required. Please enroll to receive an access token.",
         )
-    
-    
+
     def get_dictionary(self, request: Request):
         auth_header = request.headers.get("Authorization")
 
@@ -790,4 +817,3 @@ class Backend:
 if __name__ == "__main__":
     backend_service = Backend()
     backend_service.run_server()
-    

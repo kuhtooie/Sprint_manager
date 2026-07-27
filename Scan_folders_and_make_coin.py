@@ -108,7 +108,7 @@ class handle_Crypto:
         schedule_data_string = self.get_root(root_dir)
         self.make_coin(schedule_data_string)
 
-    def save_coins(self,text,hash):
-        d = {'text':text, 'merkle':self.get_merkle(),'sha':hash}
+    def save_coins(self,text,header_hash,timestamp,merkle_root,nonce):
+        d = {'text':text, 'merkle':merkle_root,'sha':header_hash,'nonce':nonce,'timestamp':timestamp}
         self.coins.append(d)
         coin_cloud.save(self.coins)

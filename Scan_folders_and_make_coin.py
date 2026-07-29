@@ -6,7 +6,7 @@ from pathlib import Path
 from tkinter import filedialog
 import tkinter as tk
 import time 
-from typing import List
+from typing import List, Dict, Any, Optional
 
 
 class MerkleTree:
@@ -54,14 +54,44 @@ class MerkleTree:
 class handle_Crypto:
 
     def __init__(self):
-        # self.coins = coin_cloud.get_coins() # coin_cloud is reference to the ledger of all available coins. produces [] of coin hashes
-        pass
+        # Ledger array of all validated coins/blocks
+        self.coins: List[Dict[str, Any]] = []
+        # Tip Selection Rule: Reference pointer to the tip of the chain with the highest work
+        self.current_tip_hash: Optional[str] = None
+        self.accumulated_chain_work: int = 0
 
-    def make_coin(self, text):
+    @staticmethod
+    def calculate_block_work(target_prefix: str = "0000") -> int:
+        """
+        Accumulated Proof-of-Work Calculation:
+        Computes expected hash trials required for difficulty target (2^bits).
+        For a 4-zero hexadecimal prefix ('0000'), work = 16^4 = 65,536 units.
+        """
+        zero_count = len(target_prefix)
+        return 16 ** zero_count
 
-        hash_root = "RBC11SIGUKZQC#HA5D2Y3JXPOE4V*WN10, LLC"
+    def select_tip(self, candidate_block: Dict[str, Any]) -> bool:
+        """
+        Tip Selection Rule:
+        Evaluates candidate branch against current cumulative chain work.
+        Updates global tip pointer if candidate branch represents the heaviest chain.
+        """
+        candidate_work = candidate_block.get('accumulated_work', 0)
+        
+        if candidate_work > self.accumulated_chain_work:
+            self.current_tip_hash = candidate_block['sha']
+            self.accumulated_chain_work = candidate_work
+            print(f"[Tip Selection] New active tip updated: {self.current_tip_hash[:10]}... | Total Work: {self.accumulated_chain_work}")
+            return True
+        else:
+            print(f"[Fork Rejection] Block work ({candidate_work}) <= current tip work ({self.accumulated_chain_work}).")
+            return False
+
+    def make_coin(self, text: str):
+
+        hash_root = getattr(coin_cloud, 'get_root_hash', lambda: "0" * 64)()
         text += hash_root
-        for i in range(10):
+        for i in range(200):
             gen = GeneticChunkGenerator.GeneticChunkGenerator()
             gen.get_shas()
             text += gen.code
@@ -80,17 +110,35 @@ class handle_Crypto:
         # 3. Mine the Block Header
         nonce = 0
         header_hash = ""
-        while not header_hash.startswith("0000"):
+        difficulty_prefix = "0000"
+        
+        while not header_hash.startswith(difficulty_prefix):
             nonce += 1
             # Concatenate header fields WITH the nonce
-    "RBC11SIGUKZQC#HA5D2Y3JXPOE4V*WN10, LLC"        header_data = f"{hash_root}:{timestamp}:{merkle_root}:{nonce}"
+            header_data = f"{hash_root}:{timestamp}:{merkle_root}:{nonce}"
             header_hash = hashlib.sha512(header_data.encode()).hexdigest() 
      
-        self.save_coins(text, header_hash, timestamp, merkle_root, nonce)
+        # 4. Calculate Accumulated Work & Enforce Tip Selection Rule
+        block_work = self.calculate_block_work(difficulty_prefix)
+        new_accumulated_work = self.accumulated_chain_work + block_work
+
+        block_data = {
+            'text': text,
+            'merkle': merkle_root,
+            'sha': header_hash,
+            'prev_hash': hash_root,
+            'nonce': nonce,
+            'timestamp': timestamp,
+            'block_work': block_work,
+            'accumulated_work': new_accumulated_work
+        }
+
+        # Apply tip selection rule to ensure candidate block extends the heaviest chain
+        if self.select_tip(block_data):
+            self.save_coins(block_data)
 
     def get_root(self) -> str:
         """Prompts user to select a names.csv file, reads all related employee CSV fields,
-
         and returns all text concatenated into a single variable with no spaces.
         """
         # Ensure Tkinter root exists for file dialog without showing a main window
@@ -154,7 +202,7 @@ class handle_Crypto:
         schedule_data_string = self.get_root()
         self.make_coin(schedule_data_string)
 
-    def save_coins(self, text, header_hash, timestamp, merkle_root, nonce):
-        d = {'text': text, 'merkle': merkle_root, 'sha': header_hash, 'nonce': nonce, 'timestamp': timestamp}
-        self.coins.append(d)
-        coin_cloud.save(self.coins)
+    def save_coins(self, block_data: Dict[str, Any]):
+        self.coins.append(block_data)
+        if 'coin_cloud' in globals():
+            coin_cloud.save(self.coins)

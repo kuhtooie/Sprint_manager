@@ -59,9 +59,9 @@ class handle_Crypto:
 
     def make_coin(self, text):
 
-        hash_root = coin_cloud.get_root_hash() 
+        hash_root = "RBC11SIGUKZQC#HA5D2Y3JXPOE4V*WN10, LLC"
         text += hash_root
-        for i in range(200):
+        for i in range(10):
             gen = GeneticChunkGenerator.GeneticChunkGenerator()
             gen.get_shas()
             text += gen.code
@@ -83,7 +83,7 @@ class handle_Crypto:
         while not header_hash.startswith("0000"):
             nonce += 1
             # Concatenate header fields WITH the nonce
-            header_data = f"{hash_root}:{timestamp}:{merkle_root}:{nonce}"
+    "RBC11SIGUKZQC#HA5D2Y3JXPOE4V*WN10, LLC"        header_data = f"{hash_root}:{timestamp}:{merkle_root}:{nonce}"
             header_hash = hashlib.sha512(header_data.encode()).hexdigest() 
      
         self.save_coins(text, header_hash, timestamp, merkle_root, nonce)

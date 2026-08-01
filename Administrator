@@ -31,6 +31,7 @@ class Administrator:
 
         # OAuth / Stripe configuration & user state
         self.user_id = str(uuid.uuid4())
+        self.target_url = "https://poeaugt.com/"
         self.backend_url = "http://127.0.0.1:8000"
 
         # Toplevel Window reference for classification
@@ -54,14 +55,14 @@ class Administrator:
         btn_c = tk.Button(self.root, text="Check on employee", command=self.check_on_schedule, padx=15, pady=5)
         btn_c.grid(row=1, column=0, padx=20, pady=20, sticky="nsew")
 
-        self.btn_d = tk.Button(self.root, text="Purchase & Open Dictionary", command=self.start_purchase_flow, padx=15,
+        self.btn_d = tk.Button(self.root, text="Go to Poe", command=self.start_purchase_flow, padx=15,
                                pady=5, bg="green", fg="white")
         self.btn_d.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
 
     def start_purchase_flow(self):
-        self.btn_d.config(state="disabled", text="Waiting for payment...", bg="orange")
-        # Opens Web 1 directly in browser
-        webbrowser.open(f"{self.backend_url}/")
+        self.btn_d.config(state="disabled", text="Opening Poe...", bg="orange")
+        # Opens website directly in browser
+        webbrowser.open(self.target_url)
         threading.Thread(target=self.poll_for_auth, daemon=True).start()
 
     def poll_for_auth(self):
@@ -86,7 +87,7 @@ class Administrator:
             time.sleep(2)
 
     def open_dictionary_window(self, data):
-        self.btn_d.config(state="normal", text="Purchase & Open Dictionary", bg="green")
+        self.btn_d.config(state="normal", text="Go to Poe", bg="green")
         new_window = tk.Toplevel(self.root)
         new_window.title("Purchased Cloud Dictionary Data")
         new_window.geometry("400x300")
@@ -523,4 +524,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = Administrator(root)
     root.mainloop()
-    

@@ -1,160 +1,162 @@
-"""Secure Backend Service with Subscription Enrollment, Automated Stripe Billing, Access Guard, and Single-Trial Enforcement."""
+"""Secure Backend Service with Subscription Enrollment, Automated Stripe Billing, 
+Access Guard, Single-Trial Enforcement, SQLAlchemy ORM, and Secure Password Hashing."""
 
 import json
 import time
-import random
-import jwt
 import stripe
 import uvicorn
 import smtplib
-from email.mime.text import MIMEText
-import pandas as pd
-from pathlib import Path
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Request, Form
+from email.mime.text import MIMEText
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request, Form, Depends
 from fastapi.responses import RedirectResponse, HTMLResponse
+from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
+
+# SQLAlchemy Imports
+from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, DateTime, Text
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
+
+# ==========================================
+# 1. Database Configuration & ORM Models
+# ==========================================
+DATABASE_URL = "sqlite:///./app_backend.db"  # Swap with postgresql://user:pass@host/db in production
+
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# Security Setup: Password Hashing via Argon2id
+password_hash = PasswordHash((Argon2Hasher(),))
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    user_id = Column(String, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=False)
+    card_last4 = Column(String, default="")  # Storing only last 4 for PCI compliance
+    exp_date = Column(String, default="")
+    enrolled = Column(Boolean, default=False)
+    bill_date = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TrialLog(Base):
+    __tablename__ = "trial_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    timestamp = Column(Float, default=time.time)
+
+
+class Waitlist(Base):
+    __tablename__ = "waitlist"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String, index=True, nullable=False)
+    timestamp = Column(Float, default=time.time)
+
+
+class ChurnFeedback(Base):
+    __tablename__ = "churn_feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, nullable=False)
+    reason = Column(String, nullable=False)
+    comments = Column(Text, nullable=True)
+    timestamp = Column(Float, default=time.time)
+
+
+class UsageLog(Base):
+    __tablename__ = "usage_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, nullable=False)
+    timestamp = Column(Float, default=time.time)
+
+
+# Create schema tables if they don't exist
+Base.metadata.create_all(bind=engine)
+
+
+# Database Session Dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ==========================================
+# 2. Main Backend Application Class
+# ==========================================
 class Backend:
-    """Secure Backend Service hosting Auth, Stripe Payments, CSV-backed User Database, and Trial History Tracking."""
+    """Secure Backend Service hosting Auth, Stripe Payments, SQLAlchemy ORM, and Access Guarding."""
 
     def __init__(self):
-        # 1. Initialize Security & Crypto Variables
+        # 1. Security & Crypto Configuration
         self.JWT_SECRET = "super_secret_system_signing_key_12345"
         self.JWT_ALGORITHM = "HS256"
 
-        # 2. Initialize SMTP Email Configurations
+        # 2. SMTP Configurations
         self.SMTP_SERVER = "smtp.gmail.com"
         self.SMTP_PORT = 587
         self.SENDER_EMAIL = "your_email@gmail.com"
         self.SENDER_PASSWORD = "your_app_password"
 
-        # 3. Initialize Stripe Configurations
+        # 3. Stripe Configurations
         stripe.api_key = "sk_test_..."
         self.ENDPOINT_SECRET = "whsec_..."
 
-        # 4. Initialize Database & File Paths
-        self.DB_FILE = Path("Names.csv")
-        self.WAITLIST_FILE = Path("Waitlist.csv")
-        self.CHURN_FILE = Path("Churn_Feedback.csv")
-        self.USAGE_FILE = Path("Usage_Log.csv")
-        self.TRIAL_LOG_FILE = Path("Trial_Log.csv")  # Persistent trial history ledger
-
-        self.users_df = self._load_or_create_db()
-        self.auth_codes = {}
-
-        # 5. Initialize FastAPI App instance
-        self.app = FastAPI(title="Secure Dictionary Auth API")
-
-        # 6. Initialize In-Memory Data Storage
+        # 4. In-Memory Cache/Storage
         self.PENDING_TOKENS = {}
+        self.auth_codes = {}
         self.DICTIONARY_DATA = {
             "apple": "A round red fruit",
             "btc": "Digital gold",
             "stocks": {"AAPL": 180.25, "TSLA": 240.50, "NVDA": 450.00}
         }
 
-        # 7. Bind class methods to the FastAPI router
+        # 5. Initialize FastAPI App
+        self.app = FastAPI(title="Secure Dictionary Auth API")
         self._setup_routes()
 
     # ==========================================
-    # Database & Storage Helper Methods
+    # Database Helper Methods
     # ==========================================
-    def _load_or_create_db(self) -> pd.DataFrame:
-        """Loads the 'Names.csv' database into memory or initializes it if absent."""
-        columns = ["user_id", "username", "password", "email", "card_number", "exp_date", "csv", "enrolled",
-                   "bill_date"]
-        if self.DB_FILE.exists():
-            df = pd.read_csv(self.DB_FILE, dtype=str)
-            for col in columns:
-                if col not in df.columns:
-                    df[col] = "0" if col == "enrolled" else ""
-        else:
-            df = pd.DataFrame(columns=columns)
-            df.to_csv(self.DB_FILE, index=False)
-        return df
+    def _has_claimed_trial(self, db: Session, email: str) -> bool:
+        """Checks if an email has ever claimed a free trial using TrialLog."""
+        return db.query(TrialLog).filter(TrialLog.email == email.lower()).first() is not None
 
-    def _save_db(self):
-        """Persists the in-memory pandas DataFrame to the 'Names.csv' file."""
-        self.users_df.to_csv(self.DB_FILE, index=False)
+    def _log_trial_claim(self, db: Session, email: str):
+        """Records an email permanently in the trial log."""
+        log_entry = TrialLog(email=email.lower(), timestamp=time.time())
+        db.add(log_entry)
+        db.commit()
 
-    def _has_claimed_trial(self, email: str) -> bool:
-        """Checks if an email has ever claimed a free trial (persisted even after user deletion)."""
-        if not self.TRIAL_LOG_FILE.exists():
-            return False
-        df = pd.read_csv(self.TRIAL_LOG_FILE, dtype=str)
-        return email.lower() in df['email'].str.lower().values
+    def _add_to_waitlist(self, db: Session, email: str):
+        """Appends an email entry to the waitlist table."""
+        entry = Waitlist(email=email, timestamp=time.time())
+        db.add(entry)
+        db.commit()
 
-    def _log_trial_claim(self, email: str):
-        """Permanently records an email in the trial log to prevent duplicate trials."""
-        entry = pd.DataFrame([{"email": email.lower(), "timestamp": time.time()}])
-        if self.TRIAL_LOG_FILE.exists():
-            entry.to_csv(self.TRIAL_LOG_FILE, mode="a", header=False, index=False)
-        else:
-            entry.to_csv(self.TRIAL_LOG_FILE, mode="w", header=["email", "timestamp"], index=False)
+    def _log_churn_feedback(self, db: Session, user_id: str, reason: str, comments: str):
+        """Records account cancellation survey responses."""
+        feedback = ChurnFeedback(user_id=user_id, reason=reason, comments=comments, timestamp=time.time())
+        db.add(feedback)
+        db.commit()
 
-    def _add_to_waitlist(self, email: str):
-        """Appends an email to 'Waitlist.csv' on disk without holding it in memory."""
-        new_row = pd.DataFrame([{"email": email, "timestamp": time.time()}])
-        if self.WAITLIST_FILE.exists():
-            new_row.to_csv(self.WAITLIST_FILE, mode="a", header=False, index=False)
-        else:
-            new_row.to_csv(self.WAITLIST_FILE, mode="w", header=["email", "timestamp"], index=False)
-
-    def _log_churn_feedback(self, user_id: str, reason: str, comments: str):
-        """Appends account cancellation survey responses to disk."""
-        entry = pd.DataFrame([{
-            "timestamp": time.time(),
-            "user_id": user_id,
-            "reason": reason,
-            "comments": comments
-        }])
-        if self.CHURN_FILE.exists():
-            entry.to_csv(self.CHURN_FILE, mode="a", header=False, index=False)
-        else:
-            entry.to_csv(self.CHURN_FILE, mode="w", header=["timestamp", "user_id", "reason", "comments"], index=False)
-
-    def _log_api_usage(self, user_id: str):
-        """Logs telemetry for API activity to track user engagement."""
-        entry = pd.DataFrame([{
-            "timestamp": time.time(),
-            "user_id": user_id
-        }])
-        if self.USAGE_FILE.exists():
-            entry.to_csv(self.USAGE_FILE, mode="a", header=False, index=False)
-        else:
-            entry.to_csv(self.USAGE_FILE, mode="w", header=["timestamp", "user_id"], index=False)
-
-    # ==========================================
-    # Email Helper Methods
-    # ==========================================
-    def send_email_otp(self, to_email: str, code: str):
-        """Dispatches an email with the authorization code via SMTP."""
-        msg = MIMEText(f"Your password reset verification code is: {code}")
-        msg["Subject"] = "Password Reset Auth Code"
-        msg["From"] = self.SENDER_EMAIL
-        msg["To"] = to_email
-
-        with smtplib.SMTP(self.SMTP_SERVER, self.SMTP_PORT) as server:
-            server.starttls()
-            server.login(self.SENDER_EMAIL, self.SENDER_PASSWORD)
-            server.sendmail(self.SENDER_EMAIL, to_email, msg.as_string())
-
-    def send_reengagement_email(self, to_email: str):
-        """Sends an automated check-in email to inactive users."""
-        body = "We noticed you haven't used your Signals API in over 2 weeks. Need help integrating it into your app? Reply to this email anytime!"
-        msg = MIMEText(body)
-        msg["Subject"] = "We miss you at Cloud Portal!"
-        msg["From"] = self.SENDER_EMAIL
-        msg["To"] = to_email
-
-        try:
-            with smtplib.SMTP(self.SMTP_SERVER, self.SMTP_PORT) as server:
-                server.starttls()
-                server.login(self.SENDER_EMAIL, self.SENDER_PASSWORD)
-                server.sendmail(self.SENDER_EMAIL, to_email, msg.as_string())
-        except Exception as e:
-            print(f"Failed to send re-engagement email to {to_email}: {e}")
+    def _log_api_usage(self, db: Session, user_id: str):
+        """Logs API access activity."""
+        log = UsageLog(user_id=user_id, timestamp=time.time())
+        db.add(log)
+        db.commit()
 
     # ==========================================
     # Route Setup & HTML Pages
@@ -167,14 +169,6 @@ class Backend:
         self.app.add_api_route("/signup", self.web3_signup_page, methods=["GET"], response_class=HTMLResponse)
         self.app.add_api_route("/signup/submit", self.web3_signup_handler, methods=["POST"])
         self.app.add_api_route("/signup/waitlist", self.waitlist_handler, methods=["POST"], response_class=HTMLResponse)
-        self.app.add_api_route("/forgot-password", self.forgot_password_page, methods=["GET"],
-                               response_class=HTMLResponse)
-        self.app.add_api_route("/forgot-password/send-code", self.forgot_password_send_code, methods=["POST"])
-        self.app.add_api_route("/verify-code", self.verify_code_page, methods=["GET"], response_class=HTMLResponse)
-        self.app.add_api_route("/verify-code/submit", self.verify_code_handler, methods=["POST"])
-        self.app.add_api_route("/reset-password", self.reset_password_page, methods=["GET"],
-                               response_class=HTMLResponse)
-        self.app.add_api_route("/reset-password/submit", self.reset_password_handler, methods=["POST"])
         self.app.add_api_route("/web4", self.web4_dashboard, methods=["GET"], response_class=HTMLResponse)
         self.app.add_api_route("/update-card", self.update_card_page, methods=["GET"], response_class=HTMLResponse)
         self.app.add_api_route("/update-card/submit", self.update_card_handler, methods=["POST"])
@@ -190,18 +184,10 @@ class Backend:
         self.app.add_api_route("/delete-user/confirm", self.delete_user_confirm, methods=["POST"],
                                response_class=HTMLResponse)
 
-        # Payment & Data Endpoints
-        self.app.add_api_route("/buy/{user_id}", self.create_checkout, methods=["GET"])
-        self.app.add_api_route("/stripe-webhook", self.stripe_webhook, methods=["POST"])
-        self.app.add_api_route("/payment-success", self.payment_success, methods=["GET"], response_class=HTMLResponse)
-        self.app.add_api_route("/claim-token/{user_id}", self.claim_token, methods=["GET"])
-        self.app.add_api_route("/get-dictionary", self.get_dictionary, methods=["GET"])
+        # Access Guarding Endpoints
         self.app.add_api_route("/get-stocks", self.get_stocks, methods=["GET"], response_class=HTMLResponse)
 
-        # Admin Triggers
-        self.app.add_api_route("/admin/trigger-reengagement", self.trigger_reengagement, methods=["POST"])
-
-    # --- WEB 1: Landing Page ---
+    # --- WEB 1: Original Landing Page ---
     def web1_landing(self):
         return """
         <html>
@@ -218,7 +204,7 @@ class Backend:
             <body>
                 <div class="container">
                     <h1>Algorithmic Stock Signals</h1>
-                    
+
                     <p style="font-size: 1.1em; line-height: 1.5; text-align: left;">
                         This is a stock signal website. The algorithm produced 260% in returns from a $14,000 account in the first year; with a max draw down of 17% and an accuracy above 60%. It is subscription based, with a $400 a month subscription. It is not recommended that you use the signals to trade during the months of June to August. So, with the subscription being $4,800 a year; with a $25,000 account; it would be reasonable to expect to make $25,000 after the subscription fee is subtracted from the profits trading options. Check out the link below for an option strategy to use with the signals to get the desired result.
                     </p>
@@ -268,16 +254,15 @@ class Backend:
         </html>
         """
 
-    def web2_login_handler(self, username: str = Form(...), password: str = Form(...)):
-        user = self.users_df[(self.users_df['username'] == username) & (self.users_df['password'] == password)]
-        if not user.empty:
-            user_id = user.iloc[0]['user_id']
-            return RedirectResponse(url=f"/web4?user_id={user_id}", status_code=303)
+    def web2_login_handler(self, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+        user = db.query(User).filter(User.username == username).first()
+        if user and password_hash.verify(password, user.password_hash):
+            return RedirectResponse(url=f"/web4?user_id={user.user_id}", status_code=303)
         return HTMLResponse(content=self.web2_login_page(error="Invalid Username or Password"), status_code=400)
 
     # --- WEB 3: Sign Up Page ---
-    def web3_signup_page(self, error: str = ""):
-        if len(self.users_df) >= 1500:
+    def web3_signup_page(self, error: str = "", db: Session = Depends(get_db)):
+        if db.query(User).count() >= 1500:
             return """
             <html>
                 <head><style>body{font-family:sans-serif; text-align:center; margin-top:80px;}</style></head>
@@ -328,35 +313,38 @@ class Backend:
 
     def web3_signup_handler(self, username: str = Form(...), password: str = Form(...),
                             confirm_password: str = Form(...), email: str = Form(...),
-                            card_number: str = Form(""), exp_date: str = Form("09/29"), csv: str = Form("445")):
-        if len(self.users_df) >= 1500:
-            return HTMLResponse(content=self.web3_signup_page(), status_code=200)
+                            card_number: str = Form(""), exp_date: str = Form("09/29"),
+                            csv: str = Form("445"), db: Session = Depends(get_db)):
+        if db.query(User).count() >= 1500:
+            return HTMLResponse(content=self.web3_signup_page(db=db), status_code=200)
 
         if password != confirm_password:
-            return HTMLResponse(content=self.web3_signup_page(error="Passwords do not match!"), status_code=400)
+            return HTMLResponse(content=self.web3_signup_page(error="Passwords do not match!", db=db), status_code=400)
 
-        if not self.users_df[self.users_df['username'] == username].empty:
-            return HTMLResponse(content=self.web3_signup_page(error="Username already exists!"), status_code=400)
+        if db.query(User).filter(User.username == username).first():
+            return HTMLResponse(content=self.web3_signup_page(error="Username already exists!", db=db), status_code=400)
 
         user_id = f"usr_{int(time.time())}"
-        new_user = pd.DataFrame([{
-            "user_id": user_id,
-            "username": username,
-            "password": password,
-            "email": email,
-            "card_number": card_number,
-            "exp_date": exp_date if exp_date else "09/29",
-            "csv": csv if csv else "445",
-            "enrolled": "0",
-            "bill_date": ""
-        }])
-        self.users_df = pd.concat([self.users_df, new_user], ignore_index=True)
-        self._save_db()
+        hashed_password = password_hash.hash(password)
+        card_last4 = card_number[-4:] if len(card_number) >= 4 else "0000"
+
+        new_user = User(
+            user_id=user_id,
+            username=username,
+            password_hash=hashed_password,
+            email=email,
+            card_last4=card_last4,
+            exp_date=exp_date if exp_date else "09/29",
+            enrolled=False,
+            bill_date=""
+        )
+        db.add(new_user)
+        db.commit()
 
         return RedirectResponse(url=f"/enroll?user_id={user_id}", status_code=303)
 
-    def waitlist_handler(self, email: str = Form(...)):
-        self._add_to_waitlist(email)
+    def waitlist_handler(self, email: str = Form(...), db: Session = Depends(get_db)):
+        self._add_to_waitlist(db, email)
         return """
         <html>
             <head><style>body{font-family:sans-serif; text-align:center; margin-top:80px;}</style></head>
@@ -369,14 +357,13 @@ class Backend:
         </html>
         """
 
-    # --- Enrollment & Instant Subscription Billing Workflow ---
-    def enroll_page(self, user_id: str):
-        user_mask = self.users_df['user_id'] == user_id
-        if self.users_df[user_mask].empty:
+    # --- Enrollment Workflow ---
+    def enroll_page(self, user_id: str, db: Session = Depends(get_db)):
+        user = db.query(User).filter(User.user_id == user_id).first()
+        if not user:
             raise HTTPException(status_code=404, detail="User not found.")
 
-        email = self.users_df[user_mask].iloc[0]['email']
-        is_eligible_for_free_trial = not self._has_claimed_trial(email)
+        is_eligible_for_free_trial = not self._has_claimed_trial(db, user.email)
 
         trial_text = """
         <p style="color:#28a745; font-weight:bold; font-size:1.1em;">
@@ -407,39 +394,32 @@ class Backend:
         </html>
         """
 
-    def enroll_confirm_handler(self, user_id: str = Form(...)):
-        user_mask = self.users_df['user_id'] == user_id
-        if self.users_df[user_mask].empty:
+    def enroll_confirm_handler(self, user_id: str = Form(...), db: Session = Depends(get_db)):
+        user = db.query(User).filter(User.user_id == user_id).first()
+        if not user:
             raise HTTPException(status_code=404, detail="User not found.")
 
-        user_row = self.users_df[user_mask].iloc[0]
-        user_email = user_row['email']
-
-        # Check if email has previously claimed a trial
-        has_claimed = self._has_claimed_trial(user_email)
+        has_claimed = self._has_claimed_trial(db, user.email)
 
         if not has_claimed:
-            # First time user: Free 1st month (30 days deferred billing)
-            self._log_trial_claim(user_email)  # Track email permanently
+            self._log_trial_claim(db, user.email)
             next_bill_dt = datetime.now() + timedelta(days=30)
             bill_date = next_bill_dt.strftime("%Y-%m-%d")
         else:
-            # Recurring user: Bill $400 subscription fee immediately
             bill_date = time.strftime("%Y-%m-%d")
             try:
-                _ = stripe.PaymentIntent.create(
-                    amount=40000,  # $400.00 USD
+                stripe.PaymentIntent.create(
+                    amount=40000,
                     currency="usd",
                     payment_method_types=["card"],
-                    description=f"Standard Monthly Subscription Charge for {user_row['username']}"
+                    description=f"Standard Monthly Subscription Charge for {user.username}"
                 )
             except Exception:
-                pass  # Fallback for offline/test key execution
+                pass
 
-        # Update enrollment status and next bill date
-        self.users_df.loc[user_mask, 'enrolled'] = "1"
-        self.users_df.loc[user_mask, 'bill_date'] = bill_date
-        self._save_db()
+        user.enrolled = True
+        user.bill_date = bill_date
+        db.commit()
 
         return RedirectResponse(url=f"/web4?user_id={user_id}", status_code=303)
 
@@ -474,16 +454,13 @@ class Backend:
         """
 
     # --- Access Guard: Check Stocks & Subscription Verification ---
-    def get_stocks(self, user_id: str):
-        """Checks client list against user_id/username and verifies enrollment status."""
-        user = self.users_df[self.users_df['user_id'] == user_id]
-        if user.empty:
+    def get_stocks(self, user_id: str, db: Session = Depends(get_db)):
+        user = db.query(User).filter(User.user_id == user_id).first()
+        if not user:
             raise HTTPException(status_code=404, detail="User not found.")
 
-        is_enrolled = str(user.iloc[0].get('enrolled', '0')) == '1'
-
-        # Check client list against username and check if client is enrolled
-        if is_enrolled:
+        if user.enrolled:
+            self._log_api_usage(db, user_id)
             stocks_data = self.DICTIONARY_DATA.get("stocks", {})
             return f"""
             <html>
@@ -541,20 +518,14 @@ class Backend:
         """
 
     def update_card_handler(self, user_id: str = Form(...), card_number: str = Form(...),
-                            exp_date: str = Form(...), csv: str = Form(...)):
-        for col in ["card_number", "exp_date", "csv"]:
-            if col not in self.users_df.columns:
-                self.users_df[col] = ""
-
-        user_mask = self.users_df['user_id'] == user_id
-        if not self.users_df[user_mask].empty:
-            self.users_df.loc[user_mask, 'card_number'] = card_number
-            self.users_df.loc[user_mask, 'exp_date'] = exp_date
-            self.users_df.loc[user_mask, 'csv'] = csv
-            self._save_db()
+                            exp_date: str = Form(...), csv: str = Form(...), db: Session = Depends(get_db)):
+        user = db.query(User).filter(User.user_id == user_id).first()
+        if user:
+            user.card_last4 = card_number[-4:] if len(card_number) >= 4 else "0000"
+            user.exp_date = exp_date
+            db.commit()
             return HTMLResponse(content=self.update_card_page(user_id=user_id, message="✓ Card updated successfully!"))
-        else:
-            raise HTTPException(status_code=404, detail="User not found.")
+        raise HTTPException(status_code=404, detail="User not found.")
 
     # --- Delete User & Churn Survey Workflow ---
     def delete_user_page(self, user_id: str):
@@ -602,16 +573,14 @@ class Backend:
         </html>
         """
 
-    def delete_user_confirm(self, user_id: str = Form(...), reason: str = Form(...), comments: str = Form("")):
-        self._log_churn_feedback(user_id=user_id, reason=reason, comments=comments)
+    def delete_user_confirm(self, user_id: str = Form(...), reason: str = Form(...), comments: str = Form(""),
+                            db: Session = Depends(get_db)):
+        self._log_churn_feedback(db, user_id=user_id, reason=reason, comments=comments)
 
-        initial_count = len(self.users_df)
-        self.users_df = self.users_df[self.users_df['user_id'] != user_id]
-
-        if len(self.users_df) < initial_count:
-            self._save_db()
-            self.PENDING_TOKENS.pop(user_id, None)
-
+        user = db.query(User).filter(User.user_id == user_id).first()
+        if user:
+            db.delete(user)
+            db.commit()
             return """
             <html>
                 <head><style>body{font-family:sans-serif; text-align:center; margin-top:80px;}</style></head>
@@ -622,229 +591,13 @@ class Backend:
                 </body>
             </html>
             """
-        else:
-            raise HTTPException(status_code=404, detail="User not found.")
+        raise HTTPException(status_code=404, detail="User not found.")
 
-    # --- Forgot Password Workflow ---
-    def forgot_password_page(self):
-        return """
-        <html>
-            <head><style>body{font-family:sans-serif; text-align:center; margin-top:80px;}</style></head>
-            <body>
-                <h2>Forgot Password</h2>
-                <form action="/forgot-password/send-code" method="post">
-                    <input type="email" name="email" placeholder="Enter your email" required><br><br>
-                    <input type="submit" value="Send Auth Code">
-                </form>
-            </body>
-        </html>
-        """
 
-    def forgot_password_send_code(self, email: str = Form(...)):
-        if self.users_df[self.users_df['email'] == email].empty:
-            raise HTTPException(status_code=404, detail="Email not registered.")
-
-        code = str(random.randint(100000, 999999))
-        self.auth_codes[email] = code
-
-        try:
-            self.send_email_otp(email, code)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
-
-        return RedirectResponse(url=f"/verify-code?email={email}", status_code=303)
-
-    def verify_code_page(self, email: str):
-        return f"""
-        <html>
-            <head><style>body{{font-family:sans-serif; text-align:center; margin-top:80px;}}</style></head>
-            <body>
-                <h2>Enter Auth Code</h2>
-                <p>Code sent to: {email}</p>
-                <form action="/verify-code/submit" method="post">
-                    <input type="hidden" name="email" value="{email}">
-                    <input type="text" name="code" placeholder="6-digit code" required><br><br>
-                    <input type="submit" value="Validate Code">
-                </form>
-            </body>
-        </html>
-        """
-
-    def verify_code_handler(self, email: str = Form(...), code: str = Form(...)):
-        if self.auth_codes.get(email) == code:
-            return RedirectResponse(url=f"/reset-password?email={email}", status_code=303)
-        raise HTTPException(status_code=400, detail="Invalid Auth Code.")
-
-    def reset_password_page(self, email: str):
-        return f"""
-        <html>
-            <head><style>body{{font-family:sans-serif; text-align:center; margin-top:80px;}}</style></head>
-            <body>
-                <h2>Change Password</h2>
-                <form action="/reset-password/submit" method="post">
-                    <input type="hidden" name="email" value="{email}">
-                    <input type="password" name="new_password" placeholder="New Password" required><br><br>
-                    <input type="submit" value="Update Password">
-                </form>
-            </body>
-        </html>
-        """
-
-    def reset_password_handler(self, email: str = Form(...), new_password: str = Form(...)):
-        self.users_df.loc[self.users_df['email'] == email, 'password'] = new_password
-        self._save_db()
-        self.auth_codes.pop(email, None)
-
-        return """
-        <html>
-            <body style="font-family:sans-serif; text-align:center; margin-top:80px;">
-                <h2 style="color:green;">Password Successfully Updated!</h2>
-                <a href="/login">Click here to Log In</a>
-            </body>
-        </html>
-        """
-
-    # ==========================================
-    # Payment & Auth Helper API Functions
-    # ==========================================
-    def generate_access_token(self, user_id: str) -> str:
-        payload = {
-            "sub": user_id,
-            "exp": time.time() + 900,
-            "iss": "AdminForce-Auth-Server"
-        }
-        return jwt.encode(payload, self.JWT_SECRET, algorithm=self.JWT_ALGORITHM)
-
-    def create_checkout(self, user_id: str):
-        try:
-            session = stripe.checkout.Session.create(
-                payment_method_types=['card'],
-                line_items=[{
-                    'price_data': {
-                        'currency': 'usd',
-                        'product_data': {'name': 'Premium Dictionary Access'},
-                        'unit_amount': 40000
-                    },
-                    'quantity': 1
-                }],
-                mode='payment',
-                success_url=f"http://127.0.0.1:8000/payment-success?user_id={user_id}",
-                cancel_url="http://127.0.0.1:8000/",
-                client_reference_id=user_id
-            )
-            return RedirectResponse(url=session.url)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    async def stripe_webhook(self, request: Request):
-        payload = await request.body()
-        sig_header = request.headers.get("stripe-signature")
-
-        try:
-            event = stripe.Webhook.construct_event(payload, sig_header, self.ENDPOINT_SECRET)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid signature")
-
-        if event['type'] == 'checkout.session.completed':
-            session = event['data']['object']
-            user_id = session['client_reference_id']
-
-            user_mask = self.users_df['user_id'] == user_id
-            if not self.users_df[user_mask].empty:
-                self.users_df.loc[user_mask, 'enrolled'] = "1"
-                self.users_df.loc[user_mask, 'bill_date'] = time.strftime("%Y-%m-%d")
-                self._save_db()
-
-            secure_jwt = self.generate_access_token(user_id)
-            self.PENDING_TOKENS[user_id] = secure_jwt
-
-        return {"status": "success"}
-
-    def payment_success(self, user_id: str):
-        return """
-        <html>
-            <head><style>body{font-family:sans-serif; text-align:center; margin-top:50px;}</style></head>
-            <body>
-                <h2 style="color: green;">✓ Payment Successful!</h2>
-                <p>You can safely close this web browser window and return to the Application.</p>
-            </body>
-        </html>
-        """
-
-    def claim_token(self, user_id: str):
-        """Claims or regenerates an access token based on active subscription status in DB."""
-        token = self.PENDING_TOKENS.pop(user_id, None)
-        if token:
-            return {"access_token": token}
-
-        user_mask = self.users_df["user_id"] == user_id
-        if self.users_df[user_mask].empty:
-            raise HTTPException(status_code=404, detail="User not found.")
-
-        user_row = self.users_df[user_mask].iloc[0]
-        if str(user_row.get("enrolled", "0")) == "1":
-            new_token = self.generate_access_token(user_id)
-            return {"access_token": new_token}
-
-        raise HTTPException(
-            status_code=403,
-            detail="Active subscription required. Please enroll to receive an access token.",
-        )
-
-    def get_dictionary(self, request: Request):
-        auth_header = request.headers.get("Authorization")
-
-        if not auth_header or not auth_header.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Unauthorized: Missing or invalid token.")
-
-        token = auth_header.split(" ")[1]
-
-        try:
-            decoded_token = jwt.decode(token, self.JWT_SECRET, algorithms=[self.JWT_ALGORITHM])
-            user_id = decoded_token.get("sub")
-
-            if user_id:
-                user_match = self.users_df[self.users_df['user_id'] == user_id]
-                if user_match.empty or str(user_match.iloc[0].get('enrolled', '0')) != '1':
-                    raise HTTPException(status_code=403, detail="Forbidden: Active subscription required.")
-
-                self._log_api_usage(user_id)
-
-            return self.DICTIONARY_DATA
-
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token has expired.")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid token signature.")
-
-    # --- Automated Inactivity & Re-engagement System ---
-    def trigger_reengagement(self):
-        """Scans usage logs and emails users who have been inactive for 14+ days."""
-        if not self.USAGE_FILE.exists():
-            return {"status": "No usage data found."}
-
-        usage_df = pd.read_csv(self.USAGE_FILE)
-        fourteen_days_ago = time.time() - (14 * 86400)
-
-        recent_usage = usage_df.groupby('user_id')['timestamp'].max().reset_index()
-        inactive_users = recent_usage[recent_usage['timestamp'] < fourteen_days_ago]
-
-        emails_sent = 0
-        for _, row in inactive_users.iterrows():
-            u_id = row['user_id']
-            user_match = self.users_df[self.users_df['user_id'] == u_id]
-            if not user_match.empty:
-                email = user_match.iloc[0]['email']
-                self.send_reengagement_email(email)
-                emails_sent += 1
-
-        return {"status": "success", "reengagement_emails_sent": emails_sent}
-
-    def run_server(self):
-        print("Starting Unified Secure Backend on http://127.0.0.1:8000")
-        uvicorn.run(self.app, host="127.0.0.1", port=8000)
-
+# Server Instance Entry Point
+backend = Backend()
+app = backend.app
 
 if __name__ == "__main__":
-    backend_service = Backend()
-    backend_service.run_server()
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+    

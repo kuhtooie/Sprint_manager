@@ -1,0 +1,113 @@
+"""
+Trading_Engine Uploader & Initializer Script
+Compatible with Administrator.py workflow expectations, explicitly setting task completion states.
+"""
+
+import os
+import pandas as pd
+
+# Central Employee Manifest definition
+EMPLOYEE_MANIFEST = {
+    "Alice_DataEngineer": {
+        "role": "Data Ingestion & Pipeline Management",
+        "tasks": [
+            "1. Initialize and verify historical CSV data pipelines.",
+            "2. Run incremental daily market data updates via yfinance.",
+            "3. Validate data integrity, columns, and index schemas."
+        ]
+    },
+    "Bob_QuantAnalyst": {
+        "role": "Indicator & Baseline Strategy Calculation",
+        "tasks": [
+            "1. Configure and verify technical baseline moving averages.",
+            "2. Implement primary momentum and oscillator entry conditions.",
+            "3. Calculate volume-based indicator confirmation filters."
+        ]
+    },
+    "Charlie_BacktestEngine": {
+        "role": "Backtest Execution & Trade Simulation",
+        "tasks": [
+            "1. Manage simulated chronological bankroll and trade loops.",
+            "2. Execute entry triggers, stop-loss, and profit targets via ATR.",
+            "3. Log trade events and map portfolio date indices."
+        ]
+    },
+    "Diana_RiskManager": {
+        "role": "Performance Analytics & Risk Optimization",
+        "tasks": [
+            "1. Compute Sharpe ratios and volatility return series.",
+            "2. Calculate Kelly Criterion position sizing metrics.",
+            "3. Filter qualifying symbols based on win-rate thresholds (>=70%)."
+        ]
+    },
+    "Evan_LivePublisher": {
+        "role": "Strategy Serialization & Live Signal Dispatch",
+        "tasks": [
+            "1. Serialize and store optimized strategy payloads to disk.",
+            "2. Scan and load saved strategy configurations on boot.",
+            "3. Fetch live forward-data and evaluate active trading signals."
+        ]
+    },
+    "Fiona_GUIArchitect": {
+        "role": "Graphical User Interface & Layout Management",
+        "tasks": [
+            "1. Build master dashboard window and action toggle controls.",
+            "2. Implement dynamic parameter entry widgets and bindings.",
+            "3. Construct scrollable performance summary result lists."
+        ]
+    },
+    "George_SystemAdmin": {
+        "role": "Application Supervision & Administration",
+        "tasks": [
+            "1. Track employee task completion logs and generate status reports.",
+            "2. Coordinate background thread execution for UI responsiveness.",
+            "3. Oversee application authentication and deployment readiness."
+        ]
+    }
+}
+
+def setup_trading_engine_files(base_dir="Trading_Engine", schedule_folder="employee_schedules", mark_completed=True):
+    modules = ["__init__.py", "Main.py", "BackTest.py", "Data.py", "Live.py", "Admin.py", "employees_config.py"]
+    
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir)
+    
+    for mod in modules:
+        path = os.path.join(base_dir, mod)
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                if mod == "employees_config.py":
+                    f.write("EMPLOYEE_MANIFEST = " + repr(EMPLOYEE_MANIFEST))
+                else:
+                    f.write(f"# Module: {mod}\n")
+
+    target_path = os.path.join(base_dir, schedule_folder)
+    if not os.path.exists(target_path):
+        os.makedirs(target_path)
+
+    employee_names = list(EMPLOYEE_MANIFEST.keys())
+
+    # Generate master names.csv for Administrator.py roster detection
+    names_df = pd.DataFrame(employee_names, columns=['EmployeeName'])
+    names_df.to_csv(os.path.join(target_path, "names.csv"), index=False, encoding="utf-8")
+
+    # Status: 1 marks the task as Completed ("Completed"), 0 marks it as To-Do
+    status_value = 1 if mark_completed else 0
+
+    for emp, info in EMPLOYEE_MANIFEST.items():
+        payload = []
+        for task in info['tasks']:
+            payload.append({
+                "Task": task,
+                "Value": info['role'],
+                "Status": status_value  # Explicitly completed (1) or pending (0)
+            })
+        df = pd.DataFrame(payload)
+        df.to_csv(os.path.join(target_path, f"{emp}.csv"), index=False, encoding="utf-8")
+
+    print(f"[SUCCESS] Directory structure and status-tracked CSVs deployed under: {os.path.abspath(base_dir)}")
+
+if __name__ == "__main__":
+    # Set mark_completed=True to designate all tasks as successfully completed (1)
+    # Set mark_completed=False if you want them treated as uncompleted to-dos (0)
+    setup_trading_engine_files(mark_completed=True)

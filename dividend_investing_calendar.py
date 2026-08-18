@@ -3,7 +3,7 @@
 Dividend Investing Calendar
 ===========================
 
-Single-file dividend screening algorithm + Tkinter calendar GUI.
+Single-file dividend screening algorithm + Tkinter calendar GUI.\n\nOptimized scan order: check for a dividend payout within the next 30 days\nbefore downloading daily or weekly OHLC history.
 
 The stock universe below contains exactly 607 stock tickers from market_data.zip.
 Forex, futures, and archive support files are excluded.
@@ -1062,12 +1062,42 @@ def score_candidate(candidate: DividendCandidate) -> float:
 
 
 def analyze_stock(symbol: str) -> DividendCandidate:
-    """Run the exact four CSV gates in sequence, stopping when a gate fails."""
+    """
+    Run the dividend-calendar eligibility check first to avoid unnecessary
+    historical downloads. Only stocks with a dividend payout within the next
+    30 days proceed to dividend-history confirmation and technical analysis.
+
+    The same four CSV conditions are enforced; only the execution order is
+    optimized for network efficiency.
+    """
     result = DividendCandidate(ticker=symbol)
 
     try:
         ticker = yf.Ticker(symbol)
 
+        # FIRST: check whether a dividend payout is scheduled within 30 days.
+        # Stocks that fail here do not download daily or weekly OHLC history.
+        calendar_ok, calendar_data, events = get_dividend_calendar(ticker, symbol)
+        for key, value in calendar_data.items():
+            setattr(result, key, value)
+        result.within_next_month = calendar_ok
+        result.events = events
+
+        if not calendar_ok:
+            result.notes = "No dividend payout found within the next 30 days."
+            return result
+
+        # SECOND: confirm dividend distributions exist.
+        # Price is not available yet, so yield is recomputed after daily history.
+        dividend_ok, dividend = check_dividend(ticker, result.price)
+        for key, value in dividend.items():
+            setattr(result, key, value)
+        result.has_dividend = dividend_ok
+        if not dividend_ok:
+            result.notes = "Near-term payout date found, but no qualifying dividend history found through yfinance."
+            return result
+
+        # THIRD: only eligible dividend stocks download daily OHLC history.
         golden_ok, golden = check_golden_cross(ticker)
         for key, value in golden.items():
             setattr(result, key, value)
@@ -1076,14 +1106,7 @@ def analyze_stock(symbol: str) -> DividendCandidate:
             result.notes = "Failed daily golden-cross/upward-momentum gate."
             return result
 
-        macd_ok, macd = check_weekly_macd(ticker)
-        for key, value in macd.items():
-            setattr(result, key, value)
-        result.macd_bullish = macd_ok
-        if not macd_ok:
-            result.notes = "Failed weekly bullish-MACD gate."
-            return result
-
+        # Recompute dividend yield now that the daily-history step populated price.
         dividend_ok, dividend = check_dividend(ticker, result.price)
         for key, value in dividend.items():
             setattr(result, key, value)
@@ -1092,19 +1115,18 @@ def analyze_stock(symbol: str) -> DividendCandidate:
             result.notes = "No qualifying dividend history found through yfinance."
             return result
 
-        calendar_ok, calendar_data, events = get_dividend_calendar(ticker, symbol)
-        for key, value in calendar_data.items():
+        # FOURTH: only stocks passing the earlier gates download weekly OHLC history.
+        macd_ok, macd = check_weekly_macd(ticker)
+        for key, value in macd.items():
             setattr(result, key, value)
-        result.within_next_month = calendar_ok
-        result.events = events
-
-        if not calendar_ok:
-            result.notes = "Dividend payer, but payout is not within the next 30 days."
+        result.macd_bullish = macd_ok
+        if not macd_ok:
+            result.notes = "Failed weekly bullish-MACD gate."
             return result
 
         result.passed = True
         result.score = score_candidate(result)
-        result.notes = "Passed all four CSV workflow gates."
+        result.notes = "Passed all four CSV workflow gates; dividend calendar checked first."
         return result
 
     except Exception as exc:
@@ -1555,4 +1577,5 @@ class DividendCalendarApp(tk.Tk):
 
 if __name__ == "__main__":
     app = DividendCalendarApp()
+    #This is to give a more informed decision and does not guarantee profit.
     app.mainloop()

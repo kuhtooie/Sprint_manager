@@ -1,72 +1,39 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 
 class BudgetApp:
+
     def __init__(self, root):
         self.root = root
-        self.root.title("Daily Budget Checklist")
+        self.root.title("Budget Calculator & Checklist")
 
-        # Geometry set to easily fit all items
-        self.root.geometry("591x720")
+        # Geometry set to easily fit all items and tabs
+        self.root.geometry("640x760")
         self.root.config(bg="#fbf6eb")  # Yellowish notebook paper background color
 
         # Title Label
         title_label = tk.Label(
             root,
-            text="Daily Cost Calculator & Checklist",
+            text="Expense Time-Horizon Calculator",
             font=("Arial", 16, "bold"),
             bg="#fbf6eb",
-            fg="#333333"
+            fg="#333333",
         )
         title_label.pack(pady=15)
 
-        # Main scrollable canvas frame to handle many items
+        # Main scrollable canvas frame to handle dynamic items (Clean Slate initially)
         self.main_frame = tk.Frame(root, bg="#fbf6eb")
         self.main_frame.pack(fill="both", expand=True, padx=20)
 
         # List to keep track of the dynamic row widgets
         self.expense_rows = []
 
-        # --- Populate initial items ---
-        # 1. Car Gas (Checked, MPD: 100, MPG: 37, Price: 4.00)
-        self.add_car_row(mpd="100", mpg="37", price="4", checked=True)
-
-        # 2. Car Insurance (Checked, $452)
-        self.add_standard_row("Car Insurance", "Monthly Cost ($)", default_val="452", checked=True)
-
-        # 3. Cellphone (Checked, $100)
-        self.add_standard_row("Cellphone", "Monthly Cost ($)", default_val="100", checked=True)
-
-        # 4. Rent (Checked, $1200)
-        self.add_standard_row("Rent", "Monthly Cost ($)", default_val="1200", checked=True)
-
-        # 5. Utilities (Checked, $150)
-        self.add_standard_row("Utilities", "Monthly Cost ($)", default_val="150", checked=True)
-
-        # 6. Food (Checked, $450)
-        self.add_standard_row("Food", "Monthly Cost ($)", default_val="450", checked=True)
-
-        # 7. Loan (Checked, $144)
-        self.add_standard_row("Loan", "Monthly Cost ($)", default_val="144", checked=True)
-
-        # 8. Storage (Checked, $145)
-        self.add_standard_row("Storage", "Monthly Cost ($)", default_val="145", checked=True)
-
-        # 9. Gym (Checked, $89)
-        self.add_standard_row("Gym", "Monthly Cost ($)", default_val="89", checked=True)
-
-        # 10. School Loan (Checked, $100)
-        self.add_standard_row("School Loan", "Monthly Cost ($)", default_val="100", checked=True)
-
-        # 11. MBA (Unchecked, $990)
-        self.add_standard_row("MBA", "Monthly Cost ($)", default_val="990", checked=False)
-
         # --- Bottom Control Section ---
         bottom_frame = tk.Frame(root, bg="#fbf6eb")
-        bottom_frame.pack(fill="x", side="bottom", pady=20)
+        bottom_frame.pack(fill="x", side="bottom", pady=15)
 
-        # Add Variable / Expense Button
+        # Add Standard Expense Button
         add_btn = tk.Button(
             bottom_frame,
             text="Add Expense",
@@ -75,32 +42,79 @@ class BudgetApp:
             bg="#4CAF50",
             fg="white",
             padx=10,
-            pady=5
+            pady=5,
         )
-        add_btn.pack(side="left", padx=20)
+        add_btn.pack(side="left", padx=15)
 
-        # Calculate Total Button
+        # Add Car Gas Button
+        add_car_btn = tk.Button(
+            bottom_frame,
+            text="Add Car Gas",
+            command=self.prompt_add_car,
+            font=("Arial", 10, "bold"),
+            bg="#8BC34A",
+            fg="white",
+            padx=10,
+            pady=5,
+        )
+        add_car_btn.pack(side="left", padx=5)
+
+        # Calculate Button
         calc_btn = tk.Button(
             bottom_frame,
-            text="Calculate Checked Total",
-            command=self.calculate_total,
+            text="Calculate Totals",
+            command=self.calculate_totals,
             font=("Arial", 10, "bold"),
             bg="#008CBA",
             fg="white",
             padx=10,
-            pady=5
+            pady=5,
         )
-        calc_btn.pack(side="right", padx=20)
+        calc_btn.pack(side="right", padx=15)
 
-        # Total Display Label
-        self.total_label = tk.Label(
-            root,
-            text="Total Daily Cost: $0.00",
-            font=("Arial", 14, "bold"),
-            bg="#fbf6eb",
-            fg="#222"
+        # --- Notebook Tabs for Time Horizons ---
+        self.notebook_frame = tk.Frame(root, bg="#fbf6eb")
+        self.notebook_frame.pack(side="bottom", fill="x", pady=10)
+
+        self.style = ttk.Style()
+        self.style.theme_use("default")
+        self.style.configure(
+            "TNotebook", background="#fbf6eb", borderwidth=0
         )
-        self.total_label.pack(side="bottom", pady=5)
+        self.style.configure(
+            "TNotebook.Tab",
+            font=("Arial", 9, "bold"),
+            padding=[8, 5],
+        )
+
+        self.notebook = ttk.Notebook(self.notebook_frame)
+        self.notebook.pack(fill="x", padx=20)
+
+        # Create tabs for different horizons
+        self.horizons = {
+            "1 Day": {"divisor": 1.0, "label": "Total Daily Cost:"},
+            "1 Week": {"divisor": 7.0, "label": "Total Weekly Cost:"},
+            "1 Month": {"divisor": 30.0, "label": "Total Monthly Cost:"},
+            "3 Months": {"divisor": 90.0, "label": "Total 3-Month Cost:"},
+            "6 Months": {"divisor": 180.0, "label": "Total 6-Month Cost:"},
+            "1 Year": {"divisor": 365.0, "label": "Total Yearly Cost:"},
+        }
+
+        self.horizon_labels = {}
+        for tab_name, data in self.horizons.items():
+            frame = tk.Frame(self.notebook, bg="#fbf6eb", height=50)
+            frame.pack_propagate(False)
+            self.notebook.add(frame, text=tab_name)
+
+            lbl = tk.Label(
+                frame,
+                text=f"{data['label']} $0.00",
+                font=("Arial", 13, "bold"),
+                bg="#fbf6eb",
+                fg="#222",
+            )
+            lbl.pack(expand=True)
+            self.horizon_labels[tab_name] = lbl
 
     def add_car_row(self, mpd="30", mpg="25", price="3.50", checked=True):
         """Creates the custom Car Gas row requiring Gas inputs only"""
@@ -108,7 +122,13 @@ class BudgetApp:
         frame.pack(fill="x")
 
         var = tk.BooleanVar(value=checked)
-        chk = tk.Checkbutton(frame, text="Car Gas", variable=var, font=("Arial", 11, "bold"), bg="#fbf6eb")
+        chk = tk.Checkbutton(
+            frame,
+            text="Car Gas",
+            variable=var,
+            font=("Arial", 11, "bold"),
+            bg="#fbf6eb",
+        )
         chk.pack(side="left", anchor="w")
 
         # Gas Inputs
@@ -133,77 +153,134 @@ class BudgetApp:
         lbl_gas_close = tk.Label(frame, text=")", font=("Arial", 9), bg="#fbf6eb")
         lbl_gas_close.pack(side="left")
 
-        # Track this gas row
-        self.expense_rows.append({
+        # Delete row button
+        del_btn = tk.Button(
+            frame,
+            text="X",
+            command=lambda: self.remove_row(frame, row_data),
+            font=("Arial", 8, "bold"),
+            bg="#e53935",
+            fg="white",
+            relief="flat",
+        )
+        del_btn.pack(side="right", padx=5)
+
+        row_data = {
             "type": "car",
+            "frame": frame,
             "checked_var": var,
             "mpd": entry_mpd,
             "mpg": entry_mpg,
-            "gas_price": entry_price
-        })
+            "gas_price": entry_price,
+        }
+        self.expense_rows.append(row_data)
 
-    def add_standard_row(self, label_text, placeholder_text, default_val="", checked=True):
-        """Creates a generic row divided by 30 (monthly -> daily) or daily direct value"""
+    def add_standard_row(self, label_text, default_val="", period_name="Monthly", days_in_period=30, checked=True):
+        """Creates a generic expense row with a specific native frequency period and days scaling"""
         frame = tk.Frame(self.main_frame, bg="#fbf6eb", pady=4)
         frame.pack(fill="x")
 
         var = tk.BooleanVar(value=checked)
-        chk = tk.Checkbutton(frame, text=label_text, variable=var, font=("Arial", 11, "bold"), bg="#fbf6eb")
+        chk = tk.Checkbutton(
+            frame,
+            text=f"{label_text} ({period_name})",
+            variable=var,
+            font=("Arial", 11, "bold"),
+            bg="#fbf6eb",
+        )
         chk.pack(side="left", anchor="w")
 
-        lbl_input = tk.Label(frame, text=f" {placeholder_text}:", font=("Arial", 9), bg="#fbf6eb")
+        lbl_input = tk.Label(frame, text=f" Cost ($):", font=("Arial", 9), bg="#fbf6eb")
         lbl_input.pack(side="left", padx=(10, 5))
 
         entry = tk.Entry(frame, width=10)
         entry.insert(0, default_val)
         entry.pack(side="left")
 
-        self.expense_rows.append({
+        # Delete row button
+        del_btn = tk.Button(
+            frame,
+            text="X",
+            command=lambda: self.remove_row(frame, row_data),
+            font=("Arial", 8, "bold"),
+            bg="#e53935",
+            fg="white",
+            relief="flat",
+        )
+        del_btn.pack(side="right", padx=5)
+
+        row_data = {
             "type": "standard",
+            "frame": frame,
             "name": label_text,
             "checked_var": var,
             "entry": entry,
-            "divisor": 30
-        })
+            "days_in_period": days_in_period  # How many days this native payment covers
+        }
+        self.expense_rows.append(row_data)
+
+    def remove_row(self, frame, row_data):
+        """Removes an expense row from the UI and tracking list"""
+        frame.destroy()
+        if row_data in self.expense_rows:
+            self.expense_rows.remove(row_data)
 
     def prompt_add_expense(self):
-        """Opens a pop-up window to ask for the name of a new expense item"""
+        """Opens a pop-up window to ask for the name and native frequency of a new expense item"""
         prompt_win = tk.Toplevel(self.root)
         prompt_win.title("Add New Expense Category")
-        prompt_win.geometry("300x180")
+        prompt_win.geometry("320x330")
         prompt_win.config(bg="#fbf6eb")
 
-        lbl = tk.Label(prompt_win, text="Expense Name (e.g., Gym, Subscriptions):", bg="#fbf6eb", font=("Arial", 10))
+        lbl = tk.Label(prompt_win, text="Expense Name (e.g., Rent, Groceries):", bg="#fbf6eb", font=("Arial", 10))
         lbl.pack(pady=10)
 
-        name_entry = tk.Entry(prompt_win, width=25)
+        name_entry = tk.Entry(prompt_win, width=28)
         name_entry.pack(pady=5)
         name_entry.focus()
 
-        calc_type = tk.StringVar(value="monthly")
-        r1 = tk.Radiobutton(prompt_win, text="Monthly (Divides by 30)", variable=calc_type, value="monthly",
-                            bg="#fbf6eb")
-        r2 = tk.Radiobutton(prompt_win, text="Daily (Direct Value)", variable=calc_type, value="daily", bg="#fbf6eb")
-        r1.pack()
-        r2.pack()
+        lbl_freq = tk.Label(prompt_win, text="Select Native Billing Frequency:", bg="#fbf6eb",
+                            font=("Arial", 10, "bold"))
+        lbl_freq.pack(pady=(10, 5))
+
+        freq_var = tk.StringVar(value="Monthly")
+
+        frequencies = [
+            ("Daily (Every 1 Day)", "Daily", 1),
+            ("Weekly (Every 7 Days)", "Weekly", 7),
+            ("Monthly (Every 30 Days)", "Monthly", 30),
+            ("3 Months (Every 90 Days)", "3 Months", 90),
+            ("6 Months (Every 180 Days)", "6 Months", 180),
+            ("Yearly (Every 365 Days)", "Yearly", 365)
+        ]
+
+        freq_map = {}
+        for text_label, key_name, days in frequencies:
+            rb = tk.Radiobutton(prompt_win, text=text_label, variable=freq_var, value=key_name, bg="#fbf6eb")
+            rb.pack(anchor="w", padx=30)
+            freq_map[key_name] = days
 
         def confirm():
             name = name_entry.get().strip()
             if name:
-                divisor = 30 if calc_type.get() == "monthly" else 1
-                placeholder = "Monthly Cost ($)" if divisor == 30 else "Daily Cost ($)"
-                self.add_standard_row(name, placeholder, default_val="0", checked=True)
-                self.expense_rows[-1]["divisor"] = divisor
+                selected_freq = freq_var.get()
+                days = freq_map[selected_freq]
+                self.add_standard_row(name, default_val="0", period_name=selected_freq, days_in_period=days,
+                                      checked=True)
                 prompt_win.destroy()
             else:
                 messagebox.showwarning("Warning", "Please enter a valid name.")
 
         btn_confirm = tk.Button(prompt_win, text="Add To Checklist", command=confirm, bg="#4CAF50", fg="white")
-        btn_confirm.pack(pady=10)
+        btn_confirm.pack(pady=15)
 
-    def calculate_total(self):
-        """Runs the math based on active checkbuttons"""
-        total_daily = 0.0
+    def prompt_add_car(self):
+        """Opens a pop-up window to configure custom car gas parameters"""
+        self.add_car_row(mpd="30", mpg="25", price="3.50", checked=True)
+
+    def calculate_totals(self):
+        """Calculates total expense normalized to a daily rate first, then projects to all tabs"""
+        base_daily_total = 0.0
 
         for row in self.expense_rows:
             if not row["checked_var"].get():
@@ -211,26 +288,29 @@ class BudgetApp:
 
             try:
                 if row["type"] == "car":
-                    # Daily Gas = (Miles per day / MPG) * Gas Price
                     mpd = float(row["mpd"].get() or 0)
                     mpg = float(row["mpg"].get() or 1)  # avoid zero division
                     gas_price = float(row["gas_price"].get() or 0)
 
                     daily_gas = (mpd / mpg) * gas_price
-                    total_daily += daily_gas
+                    base_daily_total += daily_gas
 
                 elif row["type"] == "standard":
-                    # Standard Formula: Raw value / Divisor
                     raw_val = float(row["entry"].get() or 0)
-                    daily_val = raw_val / row["divisor"]
-                    total_daily += daily_val
+                    # Convert whatever period they entered into a precise daily rate
+                    daily_val = raw_val / row["days_in_period"]
+                    base_daily_total += daily_val
 
             except ValueError:
                 messagebox.showerror("Input Error", "Please ensure all entered values are valid numbers.")
                 return
 
-        # Update total UI
-        self.total_label.config(text=f"Total Daily Cost: ${total_daily:.2f}")
+        # Update all tab labels dynamically based on the daily foundation multiplied by target horizon days
+        for tab_name, data in self.horizons.items():
+            calculated_val = base_daily_total * data["divisor"]
+            self.horizon_labels[tab_name].config(
+                text=f"{data['label']} ${calculated_val:,.2f}"
+            )
 
 
 if __name__ == "__main__":

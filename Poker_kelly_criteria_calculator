@@ -1,0 +1,309 @@
+"""Texas Hold'em quarter-Kelly calculator. Python standard library only.
+
+Run: py Main.py                 Tests: py Main.py --test
+Cards: As Kh, or 10h Jd. Suits: c d h s. No jokers.
+Uniform random opponent hands; no ranges, rake, side pots, future betting,
+or fold equity. Call model assumes the current call reaches showdown.
+Kelly reference: https://web.stanford.edu/class/aa228/reports/2018/final141.pdf
+"""
+from collections import Counter
+import math
+import random
+import queue
+import threading
+import sys
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+HAND_NAMES = ('High Card', 'Pair', '2 Pair', '3 Kind', 'Straight',
+              'Flush', 'Full House', '4 Kind', 'Straight Flush')
+# Nested decision matrix: category -> opposing category -> comparison rule.
+# Equal categories require the lexicographic kicker tuples from evaluate().
+DECISION_MATRIX = {
+    hero: {villain: ('WIN' if i > j else 'LOSE' if i < j else 'COMPARE_KICKERS')
+           for j, villain in enumerate(HAND_NAMES)}
+    for i, hero in enumerate(HAND_NAMES)
+}
+DECK = tuple((rank, suit) for rank in range(2, 15) for suit in 'cdhs')
+
+
+def parse_cards(text):
+    cards = []
+    for token in text.replace(',', ' ').split():
+        token = token.upper().replace('10', 'T')
+        if len(token) != 2 or token[0] not in '23456789TJQKA' or token[1] not in 'CDHS':
+            raise ValueError(f'Invalid card: {token}. Use cards such as As Kh 10d.')
+        cards.append(('23456789TJQKA'.index(token[0]) + 2, token[1].lower()))
+    if len(cards) != len(set(cards)):
+        raise ValueError('Duplicate cards are not allowed.')
+    return cards
+
+
+def straight_high(ranks):
+    ranks = set(ranks)
+    if 14 in ranks:
+        ranks.add(1)
+    return next((high for high in range(14, 5 - 1, -1)
+                 if all(r in ranks for r in range(high - 4, high + 1))), 0)
+
+
+def evaluate(cards):
+    """Best five of 5-7 cards; (category rank, descending tiebreak values)."""
+    if not 5 <= len(cards) <= 7 or len(set(cards)) != len(cards):
+        raise ValueError('Evaluation requires 5 to 7 unique cards.')
+    counts = Counter(r for r, s in cards)
+    ranks = sorted(counts, reverse=True)
+    flush = next((sorted((r for r, s in cards if s == suit), reverse=True)
+                  for suit in 'cdhs' if sum(s == suit for r, s in cards) >= 5), [])
+    if flush and straight_high(flush):
+        return (8, straight_high(flush))
+    quads = [r for r in ranks if counts[r] == 4]
+    if quads:
+        return (7, quads[0], max(r for r in ranks if r != quads[0]))
+    trips = [r for r in ranks if counts[r] >= 3]
+    pairs = [r for r in ranks if counts[r] >= 2]
+    if trips and any(r != trips[0] for r in pairs):
+        return (6, trips[0], max(r for r in pairs if r != trips[0]))
+    if flush:
+        return (5, *flush[:5])
+    high = straight_high(ranks)
+    if high:
+        return (4, high)
+    if trips:
+        return (3, trips[0], *[r for r in ranks if r != trips[0]][:2])
+    if len(pairs) >= 2:
+        return (2, *pairs[:2], max(r for r in ranks if r not in pairs[:2]))
+    if pairs:
+        return (1, pairs[0], *[r for r in ranks if r != pairs[0]][:3])
+    return (0, *ranks[:5])
+
+
+def compare(hero, villain):
+    rule = DECISION_MATRIX[HAND_NAMES[hero[0]]][HAND_NAMES[villain[0]]]
+    if rule == 'WIN':
+        return 1
+    if rule == 'LOSE':
+        return -1
+    return (hero > villain) - (hero < villain)
+
+
+def simulate(hole, board, opponents=1, trials=10000, seed=None):
+    if len(hole) != 2 or len(board) not in (0, 3, 4, 5):
+        raise ValueError('Enter 2 hole cards and 0, 3, 4, or 5 community cards.')
+    known = hole + board
+    if len(set(known)) != len(known) or any(c not in DECK for c in known):
+        raise ValueError('Cards must be valid and unique across all inputs.')
+    if not 1 <= opponents <= 9 or trials < 1:
+        raise ValueError('Use 1-9 opponents and a positive simulation count.')
+    deck = [c for c in DECK if c not in known]
+    rng = random.Random(seed)
+    shares = Counter()
+    categories = {name: Counter(total=0, win=0, tie=0, loss=0) for name in HAND_NAMES}
+    for _ in range(trials):
+        draw = rng.sample(deck, 5 - len(board) + 2 * opponents)
+        community = board + draw[:5 - len(board)]
+        offset = 5 - len(board)
+        hero = evaluate(hole + community)
+        rivals = [evaluate(draw[offset + 2*i:offset + 2*i + 2] + community)
+                  for i in range(opponents)]
+        comparisons = [compare(hero, v) for v in rivals]
+        share = 0.0 if -1 in comparisons else 1 / (1 + comparisons.count(0))
+        shares[share] += 1
+        row = categories[HAND_NAMES[hero[0]]]
+        row['total'] += 1
+        row['win' if share == 1 else 'loss' if share == 0 else 'tie'] += 1
+    return shares, categories
+
+
+def kelly(shares, pot, call):
+    """Optimize expected log growth using actual split-pot payoffs.
+
+    Net return per dollar called = share * (pot + call) / call - 1.
+    With no ties this is exactly (b*p-q)/b, b=pot/call.
+    """
+    if not all(math.isfinite(x) and x > 0 for x in (pot, call)):
+        raise ValueError('Pot and call must be finite positive amounts.')
+    total = sum(shares.values())
+    outcomes = [(share * (pot + call) / call - 1, n / total)
+                for share, n in shares.items() if n]
+    def derivative(f):
+        return sum(prob * ret / (1 + f * ret) for ret, prob in outcomes)
+    if derivative(0) <= 0:
+        return 0.0
+    low, high = 0.0, 1 - 1e-12
+    if derivative(high) >= 0:
+        return 1.0
+    for _ in range(70):
+        mid = (low + high) / 2
+        if derivative(mid) > 0:
+            low = mid
+        else:
+            high = mid
+    return (low + high) / 2
+
+
+class PokerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title('Poker - Quarter Kelly')
+        self.root.geometry('1030x820')
+        self.events = queue.Queue()
+        self.generation = 0
+        self.locked_hole = None
+        self.locked_board = []
+        self.variables = {}
+        form = ttk.Frame(root, padding=14)
+        form.pack(fill='x')
+        labels = [('hole', 'Hole cards (As Kh)', ''), ('flop', 'Flop (3 cards)', ''),
+                  ('turn', 'Turn (1 card)', ''), ('river', 'River (1 card)', ''),
+                  ('pot', 'Pot BEFORE your call (includes opponent bet)', ''),
+                  ('call', 'Amount to call', ''), ('bankroll', 'Available bankroll', '1000'),
+                  ('stack', 'Available table stack', '200'),
+                  ('opponents', 'Active opponents (1-9)', '1'),
+                  ('trials', 'Simulation trials (1,000-100,000)', '10000')]
+        for row, (key, label, default) in enumerate(labels):
+            ttk.Label(form, text=label).grid(row=row, column=0, sticky='w', pady=3)
+            self.variables[key] = tk.StringVar(value=default)
+            ttk.Entry(form, textvariable=self.variables[key], width=42).grid(row=row, column=1, sticky='w')
+        self.button = ttk.Button(form, text='Calculate current street', command=self.calculate)
+        self.button.grid(row=len(labels), column=0, pady=8)
+        ttk.Button(form, text='Reset hand', command=self.reset).grid(row=len(labels), column=1)
+        ttk.Label(root, text='Uniform random opponents; showdown call model. No rake, side pots, fold equity or future bets.').pack()
+        self.status = tk.StringVar(value='Enter hole cards to begin. Cards remain until Reset.')
+        ttk.Label(root, textvariable=self.status, wraplength=980).pack(pady=6)
+        self.output = tk.Text(root, height=9, wrap='word', state='disabled')
+        self.output.pack(fill='x', padx=14)
+        self.table = ttk.Treeview(root, columns=('hand', 'frequency', 'win', 'tie', 'loss'), show='headings', height=9)
+        for column, title in zip(self.table['columns'], ('Final hand', 'Frequency', 'Win | hand', 'Tie | hand', 'Loss | hand')):
+            self.table.heading(column, text=title)
+            self.table.column(column, width=180)
+        self.table.pack(fill='both', expand=True, padx=14, pady=10)
+        self.root.after(100, self.poll)
+
+    def reset(self):
+        self.generation += 1
+        self.locked_hole, self.locked_board = None, []
+        for key in ('hole', 'flop', 'turn', 'river', 'pot', 'call'):
+            self.variables[key].set('')
+        self.button.config(state='normal')
+        self.table.delete(*self.table.get_children())
+        self.write('')
+        self.status.set('Hand reset. Enter new hole cards.')
+
+    def write(self, text):
+        self.output.config(state='normal')
+        self.output.delete('1.0', 'end')
+        self.output.insert('end', text)
+        self.output.config(state='disabled')
+
+    def calculate(self):
+        try:
+            v = {k: var.get() for k, var in self.variables.items()}
+            hole, flop, turn, river = [parse_cards(v[k]) for k in ('hole', 'flop', 'turn', 'river')]
+            if len(hole) != 2 or len(flop) not in (0, 3) or len(turn) > 1 or len(river) > 1:
+                raise ValueError('Use 2 hole cards, 3 flop cards, 1 turn and 1 river.')
+            if (turn and not flop) or (river and not turn):
+                raise ValueError('Enter flop before turn, and turn before river.')
+            board = flop + turn + river
+            if len(set(hole + board)) != len(hole + board):
+                raise ValueError('A card cannot appear twice.')
+            if self.locked_hole is not None and (hole != self.locked_hole or board[:len(self.locked_board)] != self.locked_board):
+                raise ValueError('Previously calculated cards are locked. Press Reset to change them.')
+            pot, call, bankroll, stack = [float(v[k]) for k in ('pot', 'call', 'bankroll', 'stack')]
+            if not all(math.isfinite(x) and x > 0 for x in (pot, bankroll, stack)) or not math.isfinite(call) or call < 0:
+                raise ValueError('Pot, bankroll and stack must be positive; call must be nonnegative.')
+            if call > min(stack, bankroll):
+                raise ValueError('Call exceeds available funds. Side-pot/all-in calculations are not supported.')
+            opponents, trials = int(v['opponents']), int(v['trials'])
+            if not 1 <= opponents <= 9 or not 1000 <= trials <= 100000:
+                raise ValueError('Use 1-9 opponents and 1,000-100,000 trials.')
+        except ValueError as error:
+            messagebox.showerror('Check inputs', str(error))
+            return
+        self.locked_hole, self.locked_board = hole[:], board[:]
+        self.button.config(state='disabled')
+        self.status.set('Calculating showdown outcomes...')
+        generation = self.generation
+        def worker():
+            try:
+                result = simulate(hole, board, opponents, trials)
+                self.events.put((generation, result, (hole, board, pot, call, bankroll, stack, trials), None))
+            except Exception as error:
+                self.events.put((generation, None, None, str(error)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def poll(self):
+        try:
+            while True:
+                generation, result, inputs, error = self.events.get_nowait()
+                if generation != self.generation:
+                    continue
+                self.button.config(state='normal')
+                if error:
+                    self.status.set(error)
+                    continue
+                self.show_result(result, inputs)
+        except queue.Empty:
+            pass
+        self.root.after(100, self.poll)
+
+    def show_result(self, result, inputs):
+        shares, categories = result
+        hole, board, pot, call, bankroll, stack, trials = inputs
+        win, loss = shares[1.0] / trials, shares[0.0] / trials
+        tie = 1 - win - loss
+        equity = sum(s * n for s, n in shares.items()) / trials
+        se = math.sqrt(win * (1 - win) / trials)
+        street = {0: 'Preflop', 3: 'Flop', 4: 'Turn', 5: 'River'}[len(board)]
+        made = HAND_NAMES[evaluate(hole + board)[0]] if board else 'not yet a five-card hand'
+        text = (f'{street}: {made}\nWin p: {win:.2%} | Tie: {tie:.2%} | Loss q: {loss:.2%} | Equity: {equity:.2%}\n'
+                f'Win Monte Carlo standard error: {se:.2%} ({trials:,} samples).\n')
+        if call == 0:
+            text += 'CHECK available. Kelly is undefined without a positive amount at risk.\n'
+        else:
+            fraction = kelly(shares, pot, call)
+            quarter = fraction * .25
+            budget = min(bankroll * quarter, stack)
+            ev = equity * (pot + call) - call
+            action = 'CALL within model budget' if ev > 0 and call <= budget + 1e-9 else 'FOLD under quarter-Kelly budget'
+            text += (f'b = pot / call = {pot/call:.4f} | Expected call profit: ${ev:.2f}\n'
+                     f'Full Kelly: {fraction:.2%} | K x 0.25: {quarter:.2%}\n'
+                     f'Quarter-Kelly risk budget: ${budget:.2f} | Call: ${call:.2f} | {action}\n')
+        text += 'Split pots use actual pot shares in expected log growth. This budget is not a raise recommendation.'
+        self.write(text)
+        self.table.delete(*self.table.get_children())
+        for name, row in categories.items():
+            n = row['total']
+            self.table.insert('', 'end', values=(name, f'{n/trials:.2%}',
+                *[f'{row[k]/n:.2%}' if n else 'N/A' for k in ('win', 'tie', 'loss')]))
+        self.status.set(f'{street} calculated. Add the next community card(s), update pot and call, then calculate again. Reset starts a new hand.')
+
+
+def self_test():
+    examples = ['As Jd 9c 6h 3s', 'As Ad 9c 6h 3s', 'As Ad 9c 9h 3s',
+                'As Ad Ac 6h 3s', 'As 2d 3c 4h 5s', 'As Js 9s 6s 3s',
+                'As Ad Ac 6h 6s', 'As Ad Ac Ah 3s', '9s Ts Js Qs Ks']
+    for rank, cards in enumerate(examples):
+        assert evaluate(parse_cards(cards))[0] == rank
+    assert evaluate(parse_cards('As Ad Ac Ks Kd Kc 2h')) == (6, 14, 13)
+    assert evaluate(parse_cards('As 2s 3s 4s 5s Kh Qd')) == (8, 5)
+    assert evaluate(parse_cards('As Ad Ks Kd Qs Qd Jc')) == (2, 14, 13, 12)
+    assert compare(evaluate(parse_cards('As Ad Kc Qh Js')), evaluate(parse_cards('Ah Ac Kd Qs Td'))) == 1
+    assert abs(kelly(Counter({1.: 60, 0.: 40}), 100, 100) - .2) < 1e-8
+    assert kelly(Counter({1.: 20, 0.: 80}), 100, 100) == 0
+    shares, rows = simulate(parse_cards('2c 3d'), parse_cards('As Ks Qs Js Ts'), 2, 100, 1)
+    assert shares == Counter({1/3: 100})
+    assert sum(r['total'] for r in rows.values()) == 100
+    assert kelly(shares, 200, 100) == 0
+    shares, _ = simulate(parse_cards('As Ks'), parse_cards('Qs Js Ts 2d 3c'), 3, 100, 2)
+    assert shares == Counter({1.: 100})
+    print('All hand-ranking, kicker, split-pot, simulation and Kelly tests passed.')
+
+
+if __name__ == '__main__':
+    if '--test' in sys.argv:
+        self_test()
+    else:
+        root = tk.Tk()
+        PokerApp(root)
+        root.mainloop()

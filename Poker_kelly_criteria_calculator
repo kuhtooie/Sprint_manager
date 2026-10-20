@@ -154,13 +154,14 @@ class PokerApp:
         self.variables = {}
         form = ttk.Frame(root, padding=14)
         form.pack(fill='x')
-        labels = [('hole', 'Hole cards (As Kh)', ''), ('flop', 'Flop (3 cards)', ''),
-                  ('turn', 'Turn (1 card)', ''), ('river', 'River (1 card)', ''),
+        labels = [('hole', 'Hole cards (As Kh)', ''),
                   ('pot', 'Pot BEFORE your call (includes opponent bet)', ''),
                   ('call', 'Amount to call', ''), ('bankroll', 'Available bankroll', '1000'),
                   ('stack', 'Available table stack', '200'),
                   ('opponents', 'Active opponents (1-9)', '1'),
-                  ('trials', 'Simulation trials (1,000-100,000)', '10000')]
+                  ('trials', 'Simulation trials (1,000-100,000)', '10000'),
+                  ('flop', 'Flop (3 cards)', ''),
+                  ('turn', 'Turn (1 card)', ''), ('river', 'River (1 card)', '')]
         for row, (key, label, default) in enumerate(labels):
             ttk.Label(form, text=label).grid(row=row, column=0, sticky='w', pady=3)
             self.variables[key] = tk.StringVar(value=default)
